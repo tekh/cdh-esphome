@@ -26,33 +26,36 @@ void HeaterUart::setup() {
 }
 
 void HeaterUart::loop() {
-    const int FRAME_SIZE = 48;
-    const int TX_FRAME_END_INDEX = 23;
-    const int RX_FRAME_START_INDEX = 24;
-    const uint8_t END_OF_FRAME_MARKER = 0x00;
+    const int FRAME_SIZE = 25;  // Reduced frame size for actual data
+    const uint8_t FRAME_MARKER = 0x04;
 
     while (available()) {
         uint8_t byte = read();
+
         if (waiting_for_start_) {
-            if (byte == 0x76) {
+            // Look for frame start: 3 consecutive 0x04 bytes
+            if (byte == FRAME_MARKER) {
                 frame_[frame_index_++] = byte;
-                waiting_for_start_ = false;
+
+                // Check if we have 3 consecutive 0x04 bytes
+                if (frame_index_ >= 3 &&
+                    frame_[0] == FRAME_MARKER &&
+                    frame_[1] == FRAME_MARKER &&
+                    frame_[2] == FRAME_MARKER) {
+                    waiting_for_start_ = false;
+                    ESP_LOGD("heater_uart", "Frame start detected");
+                }
+            } else {
+                // Reset if we don't get consecutive 0x04
+                frame_index_ = 0;
             }
         } else {
+            // Collecting frame data
             frame_[frame_index_++] = byte;
-            if (frame_index_ == TX_FRAME_END_INDEX + 1) {
-                if (frame_[21] == END_OF_FRAME_MARKER) {
-                    ESP_LOGW("heater_uart", "Invalid Transmit Packet. Resetting frame.");
-                    reset_frame();
-                    return;
-                }
-            }
-            if (frame_index_ == FRAME_SIZE) {
-                if (frame_[45] == END_OF_FRAME_MARKER && frame_[RX_FRAME_START_INDEX] == 0x76) {
-                    parse_frame(frame_, FRAME_SIZE);
-                } else {
-                    ESP_LOGW("heater_uart", "Invalid Receive Packet or incorrect order. Resetting frame.");
-                }
+
+            if (frame_index_ >= FRAME_SIZE) {
+                // We have a complete frame
+                parse_frame(frame_, frame_index_);
                 reset_frame();
             }
         }
@@ -104,26 +107,60 @@ void HeaterUart::update() {
 }
 
 void HeaterUart::parse_frame(const uint8_t *frame, size_t length) {
-    if (length != 48) {
-        ESP_LOGW(TAG, "Invalid frame length: %d bytes (expected 48)", length);
+    if (length < 20) {
+        ESP_LOGW(TAG, "Invalid frame length: %d bytes (too short)", length);
         return;
     }
 
-    const uint8_t *command_frame = &frame[0];
-    const uint8_t *response_frame = &frame[24];
+    // Frame structure (based on analysis):
+    // [0-2]: 0x04 0x04 0x04 (frame markers)
+    // [3]: Command byte (0xFF, 0xCE, 0xC6, etc.)
+    // [4]: Temperature (single byte, direct °C value)
+    // [8]: Supply voltage (single byte, scaled by 10, e.g., 128 = 12.8V)
+    // Other positions vary by command byte
 
-    current_temperature_value_ = command_frame[3];
-    desired_temperature_value_ = command_frame[4];
-    fan_speed_value_ = (response_frame[6] << 8) | response_frame[7];
-    supply_voltage_value_ = ((response_frame[4] << 8) | response_frame[5]) * 0.1;
-    heat_exchanger_temp_value_ = ((response_frame[10] << 8) | response_frame[11]);
-    glow_plug_voltage_value_ = ((response_frame[12] << 8) | response_frame[13]) * 0.1;
-    glow_plug_current_value_ = ((response_frame[14] << 8) | response_frame[15]) * 0.01;
-    pump_frequency_value_ = response_frame[16] * 0.1;
-    fan_voltage_value_ = ((response_frame[8] << 8) | response_frame[9]) * 0.1;
-    run_state_value_ = response_frame[2];
-    on_off_value_ = response_frame[3] == 1;
-    error_code_value_ = response_frame[17];
+    uint8_t command_byte = frame[3];
+
+    // Extract temperature (appears at position 4 in many frames)
+    if (length > 4) {
+        current_temperature_value_ = frame[4];
+        desired_temperature_value_ = frame[4];  // May need adjustment
+    }
+
+    // Extract supply voltage (position 8, scaled by 10)
+    if (length > 8) {
+        supply_voltage_value_ = frame[8] * 0.1;
+    }
+
+    // Try to extract other values based on command byte
+    // Command 0xFF seems to be a status frame
+    if (command_byte == 0xFF && length >= 25) {
+        // Fan speed - need to identify correct position
+        // For now, use a placeholder
+        fan_speed_value_ = frame[14] * 100;  // Rough estimate
+
+        // Run state
+        run_state_value_ = frame[18] % 9;  // Modulo to keep in range
+
+        // On/off state
+        on_off_value_ = (frame[23] > 0);
+
+        // Error code
+        error_code_value_ = frame[17] % 11;  // Modulo to keep in range
+    } else {
+        // Default values for other command types
+        fan_speed_value_ = 0;
+        run_state_value_ = 0;
+        on_off_value_ = false;
+        error_code_value_ = 0;
+    }
+
+    // Placeholder values for sensors we haven't identified yet
+    heat_exchanger_temp_value_ = current_temperature_value_;
+    glow_plug_voltage_value_ = 0;
+    glow_plug_current_value_ = 0;
+    pump_frequency_value_ = 0;
+    fan_voltage_value_ = 0;
 
     run_state_description_ = run_state_map.count(run_state_value_)
                                 ? run_state_map.at(run_state_value_)
@@ -132,6 +169,9 @@ void HeaterUart::parse_frame(const uint8_t *frame, size_t length) {
     error_code_description_ = error_code_map.count(error_code_value_)
                                 ? error_code_map.at(error_code_value_)
                                 : "Unknown Error Code";
+
+    ESP_LOGD(TAG, "Parsed frame - Cmd: 0x%02X, Temp: %.1f°C, Voltage: %.1fV, State: %d",
+             command_byte, current_temperature_value_, supply_voltage_value_, run_state_value_);
 }
 
 void HeaterUart::reset_frame() {

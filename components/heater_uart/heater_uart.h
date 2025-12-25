@@ -32,7 +32,7 @@ class HeaterUart : public PollingComponent, public uart::UARTDevice {
   std::map<std::string, binary_sensor::BinarySensor *> binary_sensors_;
 
   // Frame handling
-  uint8_t frame_[48];
+  uint8_t frame_[32];  // Reduced from 48 to 32 bytes
   int frame_index_ = 0;
   bool waiting_for_start_ = true;
 
