@@ -193,6 +193,11 @@ void HeaterUart::update() {
     if (temperature_number_ != nullptr) {
         temperature_number_->publish_state(desired_temperature_value_);
     }
+
+    // Sync pump number with current setting
+    if (pump_number_ != nullptr) {
+        pump_number_->publish_state(pump_freq_setting_);
+    }
 }
 
 void HeaterUart::parse_frame(const uint8_t *frame, size_t length) {
@@ -260,9 +265,10 @@ void HeaterUart::turn_on() {
 
 void HeaterUart::turn_off() {
     if (standalone_mode_) {
-        ESP_LOGI(TAG, "Queuing STOP command (standalone mode)");
+        ESP_LOGI(TAG, "Queuing STOP command (standalone mode) - entering cooldown");
         pending_on_off_command_ = CMD_STOP;
         heater_on_request_ = false;
+        in_cooldown_ = true;  // Start cooldown sequence
     } else {
         if (!has_valid_tx_frame_) {
             ESP_LOGW(TAG, "Cannot turn off - no valid TX frame captured yet");
@@ -291,6 +297,18 @@ void HeaterUart::set_desired_temperature(uint8_t temperature) {
         ESP_LOGI(TAG, "Queuing temperature change to %d°C (injection mode)", temperature);
         pending_temperature_ = temperature;
     }
+}
+
+void HeaterUart::set_pump_frequency(float frequency) {
+    if (frequency < PUMP_FREQ_MIN || frequency > PUMP_FREQ_MAX) {
+        ESP_LOGW(TAG, "Pump frequency %.1f out of range (%.1f-%.1f Hz)",
+                 frequency, PUMP_FREQ_MIN, PUMP_FREQ_MAX);
+        return;
+    }
+
+    ESP_LOGI(TAG, "Setting pump frequency to %.1f Hz", frequency);
+    pump_freq_setting_ = frequency;
+    // Frequency will be sent in next frame automatically (standalone mode)
 }
 
 void HeaterUart::send_command(uint8_t command, uint8_t temperature) {
@@ -429,19 +447,33 @@ void HeaterUart::build_tx_frame(uint8_t *frame, uint8_t command) {
     // Byte 4: Desired temperature
     frame[4] = desired_temp_setting_;
 
-    // Byte 5: Min pump frequency (0.1 Hz units)
-    frame[5] = DEFAULT_MIN_PUMP_FREQ;
+    // Bytes 5-6: Pump frequency (0.1 Hz units)
+    // Set both min and max to same value for fixed Hz mode (direct pump control)
+    uint8_t pump_freq_raw = static_cast<uint8_t>(pump_freq_setting_ * 10.0f);
+    frame[5] = pump_freq_raw;  // Min pump frequency
+    frame[6] = pump_freq_raw;  // Max pump frequency (same = fixed Hz mode)
 
-    // Byte 6: Max pump frequency (0.1 Hz units)
-    frame[6] = DEFAULT_MAX_PUMP_FREQ;
+    // Bytes 7-10: Fan RPM
+    uint16_t fan_rpm;
 
-    // Bytes 7-8: Min fan RPM (big endian)
-    frame[7] = (DEFAULT_MIN_FAN_RPM >> 8) & 0xFF;
-    frame[8] = DEFAULT_MIN_FAN_RPM & 0xFF;
+    if (in_cooldown_) {
+        // Cooldown mode: run fan at high speed to cool heat exchanger
+        fan_rpm = COOLDOWN_FAN_RPM;
+    } else {
+        // Normal operation: scale fan proportionally with pump frequency
+        // This maintains proper combustion by matching fan speed to fuel rate.
+        float pump_ratio = (pump_freq_setting_ - PUMP_FREQ_MIN) / (PUMP_FREQ_MAX - PUMP_FREQ_MIN);
+        pump_ratio = std::max(0.0f, std::min(1.0f, pump_ratio));  // Clamp 0-1
+        fan_rpm = static_cast<uint16_t>(
+            DEFAULT_MIN_FAN_RPM + pump_ratio * (DEFAULT_MAX_FAN_RPM - DEFAULT_MIN_FAN_RPM)
+        );
+    }
 
-    // Bytes 9-10: Max fan RPM (big endian)
-    frame[9] = (DEFAULT_MAX_FAN_RPM >> 8) & 0xFF;
-    frame[10] = DEFAULT_MAX_FAN_RPM & 0xFF;
+    // Set both min and max to same value for fixed RPM mode
+    frame[7] = (fan_rpm >> 8) & 0xFF;
+    frame[8] = fan_rpm & 0xFF;
+    frame[9] = (fan_rpm >> 8) & 0xFF;
+    frame[10] = fan_rpm & 0xFF;
 
     // Byte 11: Operating voltage
     frame[11] = operating_voltage_;
@@ -578,9 +610,57 @@ void HeaterUart::parse_rx_frame(const uint8_t *frame, size_t length) {
                                 ? error_code_map.at(error_code_value_)
                                 : "Unknown Error Code";
 
-    ESP_LOGD(TAG, "RX: State=%d (%s), OnOff=%d, Fan=%d RPM, Supply=%.1fV, Error=%d",
+    ESP_LOGD(TAG, "RX: State=%d (%s), OnOff=%d, Fan=%d RPM, Supply=%.1fV, HX=%.0f°C, Error=%d%s",
              run_state_value_, run_state_description_.c_str(), on_off_value_,
-             fan_speed_value_, supply_voltage_value_, error_code_value_);
+             fan_speed_value_, supply_voltage_value_, heat_exchanger_temp_value_, error_code_value_,
+             in_cooldown_ ? " [COOLDOWN]" : "");
+
+    float hx_temp = heat_exchanger_temp_value_;
+
+    // Cooldown monitoring: check if heat exchanger has cooled enough
+    if (in_cooldown_ && standalone_mode_) {
+        if (hx_temp <= COOLDOWN_TARGET_TEMP) {
+            ESP_LOGI(TAG, "Cooldown complete: HX temp %.0f°C <= %.0f°C target. Fan stopping.",
+                     hx_temp, COOLDOWN_TARGET_TEMP);
+            in_cooldown_ = false;
+        } else {
+            ESP_LOGD(TAG, "Cooldown in progress: HX temp %.0f°C (target: %.0f°C), Fan at %d RPM",
+                     hx_temp, COOLDOWN_TARGET_TEMP, COOLDOWN_FAN_RPM);
+        }
+        return;  // Skip normal safety logic during cooldown
+    }
+
+    // Heat exchanger temperature safety logic (only when heater is running)
+    if (on_off_value_ && standalone_mode_) {
+        // CRITICAL: Emergency shutdown if heat exchanger is too hot
+        if (hx_temp > HX_TEMP_CRITICAL) {
+            ESP_LOGE(TAG, "CRITICAL: Heat exchanger %.0f°C > %.0f°C limit! Emergency shutdown!",
+                     hx_temp, HX_TEMP_CRITICAL);
+            pending_on_off_command_ = CMD_STOP;
+            heater_on_request_ = false;
+            in_cooldown_ = true;  // Enter cooldown mode
+            return;
+        }
+
+        // Heat exchanger too cold: increase pump to add more fuel/heat
+        if (hx_temp < HX_TEMP_LOW) {
+            float new_freq = pump_freq_setting_ + PUMP_FREQ_STEP;
+            if (new_freq <= PUMP_FREQ_MAX) {
+                ESP_LOGI(TAG, "HX temp %.0f°C < %.0f°C: increasing pump %.1f -> %.1f Hz",
+                         hx_temp, HX_TEMP_LOW, pump_freq_setting_, new_freq);
+                pump_freq_setting_ = new_freq;
+            }
+        }
+        // Heat exchanger at/above target: decrease pump to reduce fuel/heat
+        else if (hx_temp >= HX_TEMP_HIGH) {
+            float new_freq = pump_freq_setting_ - PUMP_FREQ_STEP;
+            if (new_freq >= PUMP_FREQ_MIN) {
+                ESP_LOGI(TAG, "HX temp %.0f°C >= %.0f°C: decreasing pump %.1f -> %.1f Hz",
+                         hx_temp, HX_TEMP_HIGH, pump_freq_setting_, new_freq);
+                pump_freq_setting_ = new_freq;
+            }
+        }
+    }
 }
 
 }  // namespace heater_uart

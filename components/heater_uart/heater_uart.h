@@ -30,11 +30,27 @@ static const uint8_t VOLTAGE_24V = 0xF0;  // 240 = 24.0V
 // Default frame parameters (from Afterburner project)
 static const uint8_t DEFAULT_MIN_PUMP_FREQ = 0x0E;    // 1.4 Hz
 static const uint8_t DEFAULT_MAX_PUMP_FREQ = 0x32;    // 5.0 Hz
+
+// Pump frequency limits (0.1 Hz units)
+static const float PUMP_FREQ_MIN = 1.0f;   // 1.0 Hz minimum
+static const float PUMP_FREQ_MAX = 5.5f;   // 5.5 Hz maximum (8kW heater)
+static const float PUMP_FREQ_STEP = 0.1f;  // Adjustment step size
+
+// Heat exchanger temperature thresholds (°C)
+static const float HX_TEMP_LOW = 190.0f;      // Below this: increase pump (more fuel)
+static const float HX_TEMP_TARGET = 250.0f;   // Target temperature
+static const float HX_TEMP_HIGH = 250.0f;     // At/above this: decrease pump (less fuel)
+static const float HX_TEMP_CRITICAL = 265.0f; // Above this: emergency shutdown
+
+// Cooldown parameters
+static const uint16_t COOLDOWN_FAN_RPM = 4200;   // Fan speed during cooldown
+static const float COOLDOWN_TARGET_TEMP = 60.0f; // HX temp to reach before stopping fan
 static const uint16_t DEFAULT_MIN_FAN_RPM = 1450;
 static const uint16_t DEFAULT_MAX_FAN_RPM = 4500;
 static const uint8_t DEFAULT_FAN_SENSOR = 0x01;       // SN-1
 static const uint8_t DEFAULT_GLOW_POWER = 0x05;
-static const uint16_t DEFAULT_ALTITUDE = 0x0DAC;      // 3500m
+//static const uint16_t DEFAULT_ALTITUDE = 0x0DAC;      // 3500m
+static const uint16_t DEFAULT_ALTITUDE = 0x02EE;      // 750m
 
 // Standalone mode timing
 static const uint32_t STANDALONE_TX_INTERVAL_MS = 1000;  // 1 Hz
@@ -51,6 +67,7 @@ class HeaterUart : public PollingComponent, public uart::UARTDevice {
   void set_power_switch(switch_::Switch *sw) { this->power_switch_ = sw; }
   void set_temperature_number(number::Number *num) { this->temperature_number_ = num; }
   void set_temperature_sensor(sensor::Sensor *sensor) { this->external_temp_sensor_ = sensor; }
+  void set_pump_number(number::Number *num) { this->pump_number_ = num; }
 
   // Configuration setters
   void set_standalone_mode(bool standalone) { this->standalone_mode_ = standalone; }
@@ -64,10 +81,12 @@ class HeaterUart : public PollingComponent, public uart::UARTDevice {
   void turn_on();
   void turn_off();
   void set_desired_temperature(uint8_t temperature);
+  void set_pump_frequency(float frequency);
 
   // State accessors
   bool get_on_off_state() const { return on_off_value_; }
   int get_desired_temperature() const { return desired_temperature_value_; }
+  float get_pump_frequency_setting() const { return pump_freq_setting_; }
   bool is_standalone_mode() const { return standalone_mode_; }
 
  protected:
@@ -84,6 +103,12 @@ class HeaterUart : public PollingComponent, public uart::UARTDevice {
 
   // External temperature sensor (for standalone mode)
   sensor::Sensor *external_temp_sensor_{nullptr};
+
+  // Pump frequency number reference (for state sync)
+  number::Number *pump_number_{nullptr};
+
+  // Pump frequency setting (Hz, for fixed Hz mode)
+  float pump_freq_setting_ = 1.6f;  // Default to low pump rate
 
   // Frame handling
   uint8_t frame_[48];
@@ -115,6 +140,7 @@ class HeaterUart : public PollingComponent, public uart::UARTDevice {
   uint32_t rx_timeout_ = 0;            // RX timeout timestamp
   uint8_t rx_frame_[24];               // Buffer for RX-only frame in standalone
   int rx_frame_index_ = 0;             // Index for RX frame
+  bool in_cooldown_ = false;           // Cooldown mode active (fan running to cool HX)
 
   // Parsed data
   float current_temperature_value_ = 0;
