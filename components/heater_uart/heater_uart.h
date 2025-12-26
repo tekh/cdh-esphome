@@ -5,12 +5,18 @@
 #include "esphome/components/sensor/sensor.h"
 #include "esphome/components/text_sensor/text_sensor.h"
 #include "esphome/components/binary_sensor/binary_sensor.h"
+#include "esphome/components/switch/switch.h"
 
 #include <map>
 #include <string>
 
 namespace esphome {
 namespace heater_uart {
+
+// Command bytes for Tx Byte[2]
+static const uint8_t CMD_NO_CHANGE = 0x00;
+static const uint8_t CMD_STOP = 0x05;
+static const uint8_t CMD_START = 0xA0;
 
 class HeaterUart : public PollingComponent, public uart::UARTDevice {
  public:
@@ -20,10 +26,18 @@ class HeaterUart : public PollingComponent, public uart::UARTDevice {
   void set_sensor(const std::string &key, sensor::Sensor *sensor);
   void set_text_sensor(const std::string &key, text_sensor::TextSensor *text_sensor);
   void set_binary_sensor(const std::string &key, binary_sensor::BinarySensor *binary_sensor);
+  void set_power_switch(switch_::Switch *sw) { this->power_switch_ = sw; }
 
   void setup() override;
   void loop() override;
   void update() override;
+
+  // Command methods
+  void turn_on();
+  void turn_off();
+
+  // State accessor
+  bool get_on_off_state() const { return on_off_value_; }
 
  protected:
   // Sensor storage
@@ -31,10 +45,24 @@ class HeaterUart : public PollingComponent, public uart::UARTDevice {
   std::map<std::string, text_sensor::TextSensor *> text_sensors_;
   std::map<std::string, binary_sensor::BinarySensor *> binary_sensors_;
 
+  // Power switch reference (for state sync)
+  switch_::Switch *power_switch_{nullptr};
+
   // Frame handling
-  uint8_t frame_[32];  // Reduced from 48 to 32 bytes
+  uint8_t frame_[48];
   int frame_index_ = 0;
   bool waiting_for_start_ = true;
+
+  // Store last TX frame from LCD controller (for command injection)
+  uint8_t last_tx_frame_[24];
+  bool has_valid_tx_frame_ = false;
+
+  // Pending command to inject (0x00 = none)
+  uint8_t pending_command_ = CMD_NO_CHANGE;
+
+  // Track if we just sent a command (to handle heater's response)
+  bool awaiting_inject_response_ = false;
+  uint32_t inject_response_timeout_ = 0;
 
   // Parsed data
   float current_temperature_value_ = 0;
@@ -55,6 +83,8 @@ class HeaterUart : public PollingComponent, public uart::UARTDevice {
 
   void parse_frame(const uint8_t *frame, size_t length);
   void reset_frame();
+  void send_command(uint8_t command);
+  uint16_t calc_crc16(const uint8_t *data, size_t length);
 
   // Mappings for error and run states
   static const std::map<int, std::string> run_state_map;
