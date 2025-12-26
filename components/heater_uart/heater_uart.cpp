@@ -253,6 +253,10 @@ void HeaterUart::turn_on() {
         ESP_LOGI(TAG, "Queuing START command (standalone mode)");
         pending_on_off_command_ = CMD_START;
         heater_on_request_ = true;
+        // Set pump to initial ignition frequency - will ramp up after flame stabilizes
+        pump_freq_setting_ = PUMP_FREQ_INITIAL;
+        last_pump_adjust_time_ = millis();  // Reset adjustment timer
+        ESP_LOGI(TAG, "Pump frequency set to %.1f Hz for ignition", pump_freq_setting_);
     } else {
         if (!has_valid_tx_frame_) {
             ESP_LOGW(TAG, "Cannot turn on - no valid TX frame captured yet");
@@ -456,9 +460,15 @@ void HeaterUart::build_tx_frame(uint8_t *frame, uint8_t command) {
     // Bytes 7-10: Fan RPM
     uint16_t fan_rpm;
 
-    if (in_cooldown_) {
+    if (in_cooldown_ || run_state_value_ == RUN_STATE_COOLDOWN) {
         // Cooldown mode: run fan at high speed to cool heat exchanger
         fan_rpm = COOLDOWN_FAN_RPM;
+    } else if (run_state_value_ == RUN_STATE_IGNITED && heat_exchanger_temp_value_ < 100.0f) {
+        // State 4 (Ignited) with HX < 100°C: Keep fan at moderate speed for stable combustion
+        // Pump can ramp up, but fan should wait until HX >= 100°C to scale with pump
+        fan_rpm = IGNITION_FAN_RPM;
+        ESP_LOGD(TAG, "Ignition: HX %.0f°C < 100°C, fan at ignition speed %d RPM",
+                 heat_exchanger_temp_value_, fan_rpm);
     } else {
         // Normal operation: scale fan proportionally with pump frequency
         // This maintains proper combustion by matching fan speed to fuel rate.
@@ -610,12 +620,15 @@ void HeaterUart::parse_rx_frame(const uint8_t *frame, size_t length) {
                                 ? error_code_map.at(error_code_value_)
                                 : "Unknown Error Code";
 
-    ESP_LOGD(TAG, "RX: State=%d (%s), OnOff=%d, Fan=%d RPM, Supply=%.1fV, HX=%.0f°C, Error=%d%s",
-             run_state_value_, run_state_description_.c_str(), on_off_value_,
-             fan_speed_value_, supply_voltage_value_, heat_exchanger_temp_value_, error_code_value_,
-             in_cooldown_ ? " [COOLDOWN]" : "");
-
     float hx_temp = heat_exchanger_temp_value_;
+    float room_temp = current_temperature_value_;  // From external sensor (set in build_tx_frame)
+    float target_temp = static_cast<float>(desired_temp_setting_);
+    float ramp_down_temp = target_temp - temp_backoff_offset_;
+
+    ESP_LOGD(TAG, "RX: State=%d (%s), OnOff=%d, Fan=%d RPM, HX=%.0f°C, Room=%.1f°C, Target=%.1f°C, Pump=%.1fHz%s",
+             run_state_value_, run_state_description_.c_str(), on_off_value_,
+             fan_speed_value_, hx_temp, room_temp, target_temp, pump_freq_setting_,
+             in_cooldown_ ? " [COOLDOWN]" : "");
 
     // Cooldown monitoring: check if heat exchanger has cooled enough
     if (in_cooldown_ && standalone_mode_) {
@@ -627,38 +640,92 @@ void HeaterUart::parse_rx_frame(const uint8_t *frame, size_t length) {
             ESP_LOGD(TAG, "Cooldown in progress: HX temp %.0f°C (target: %.0f°C), Fan at %d RPM",
                      hx_temp, COOLDOWN_TARGET_TEMP, COOLDOWN_FAN_RPM);
         }
-        return;  // Skip normal safety logic during cooldown
+        return;  // Skip thermostat logic during cooldown
     }
 
-    // Heat exchanger temperature safety logic (only when heater is running)
+    // Thermostat and safety logic
+    // During early ignition (states 1-3) and shutdown (states 6-8), the heater's internal
+    // controller manages pump/fan - we should NOT interfere with those sequences.
+    // State 4 (Ignited): Ramp pump to max to reach operating temperature quickly.
+    // State 5 (Running): Normal thermostat control.
     if (on_off_value_ && standalone_mode_) {
-        // CRITICAL: Emergency shutdown if heat exchanger is too hot
+        uint32_t now = millis();
+
+        if (run_state_value_ == RUN_STATE_IGNITED) {
+            // Heater has ignited - ramp pump to max to reach operating temp quickly
+            // But respect the adjustment interval - thermal response takes time
+            if (pump_freq_setting_ < PUMP_FREQ_MAX) {
+                if (now - last_pump_adjust_time_ >= PUMP_ADJUST_INTERVAL_MS) {
+                    float new_freq = std::min(pump_freq_setting_ + PUMP_FREQ_STEP, PUMP_FREQ_MAX);
+                    ESP_LOGI(TAG, "Ignited (state 4): ramping pump %.1f -> %.1f Hz", pump_freq_setting_, new_freq);
+                    pump_freq_setting_ = new_freq;
+                    last_pump_adjust_time_ = now;
+                }
+            }
+            return;
+        }
+
+        if (run_state_value_ != RUN_STATE_RUNNING) {
+            // Heater is in early startup (1-3) or shutdown (6-8) - let it handle pump/fan
+            ESP_LOGD(TAG, "Ignition/shutdown in progress (state %d) - thermostat paused", run_state_value_);
+            return;
+        }
+
+        // === SAFETY: Emergency shutdown if heat exchanger is critically hot ===
         if (hx_temp > HX_TEMP_CRITICAL) {
             ESP_LOGE(TAG, "CRITICAL: Heat exchanger %.0f°C > %.0f°C limit! Emergency shutdown!",
                      hx_temp, HX_TEMP_CRITICAL);
             pending_on_off_command_ = CMD_STOP;
             heater_on_request_ = false;
-            in_cooldown_ = true;  // Enter cooldown mode
+            in_cooldown_ = true;
             return;
         }
 
-        // Heat exchanger too cold: increase pump to add more fuel/heat
-        if (hx_temp < HX_TEMP_LOW) {
-            float new_freq = pump_freq_setting_ + PUMP_FREQ_STEP;
-            if (new_freq <= PUMP_FREQ_MAX) {
-                ESP_LOGI(TAG, "HX temp %.0f°C < %.0f°C: increasing pump %.1f -> %.1f Hz",
-                         hx_temp, HX_TEMP_LOW, pump_freq_setting_, new_freq);
-                pump_freq_setting_ = new_freq;
+        // === ROOM TEMPERATURE THERMOSTAT ===
+        // Only adjust if enough time has passed - thermal mass means changes take time
+        if (now - last_pump_adjust_time_ < PUMP_ADJUST_INTERVAL_MS) {
+            return;  // Wait for thermal response before next adjustment
+        }
+
+        // This is the main control loop for comfort
+        float new_freq = pump_freq_setting_;
+
+        if (room_temp < ramp_down_temp) {
+            // Room is cold: ramp UP pump to heat faster
+            new_freq = pump_freq_setting_ + PUMP_FREQ_STEP;
+            if (new_freq <= PUMP_FREQ_MAX && new_freq != pump_freq_setting_) {
+                ESP_LOGI(TAG, "Room %.1f°C < %.1f°C (target-%.1f): increasing pump %.1f -> %.1f Hz",
+                         room_temp, ramp_down_temp, temp_backoff_offset_, pump_freq_setting_, new_freq);
+            }
+        } else if (room_temp >= target_temp) {
+            // Room reached target: ramp DOWN pump to maintain
+            new_freq = pump_freq_setting_ - PUMP_FREQ_STEP;
+            if (new_freq >= PUMP_FREQ_MIN && new_freq != pump_freq_setting_) {
+                ESP_LOGI(TAG, "Room %.1f°C >= %.1f°C target: decreasing pump %.1f -> %.1f Hz",
+                         room_temp, target_temp, pump_freq_setting_, new_freq);
             }
         }
-        // Heat exchanger at/above target: decrease pump to reduce fuel/heat
-        else if (hx_temp >= HX_TEMP_HIGH) {
-            float new_freq = pump_freq_setting_ - PUMP_FREQ_STEP;
-            if (new_freq >= PUMP_FREQ_MIN) {
-                ESP_LOGI(TAG, "HX temp %.0f°C >= %.0f°C: decreasing pump %.1f -> %.1f Hz",
-                         hx_temp, HX_TEMP_HIGH, pump_freq_setting_, new_freq);
-                pump_freq_setting_ = new_freq;
-            }
+        // else: room_temp is between ramp_down_temp and target_temp - maintain current pump
+
+        // === SAFETY: Heat exchanger limits override thermostat ===
+        // Combustion safety takes priority over comfort
+        if (hx_temp < HX_TEMP_LOW && new_freq < pump_freq_setting_) {
+            // HX too cold but thermostat wants to reduce - override, force increase
+            new_freq = pump_freq_setting_ + PUMP_FREQ_STEP;
+            ESP_LOGW(TAG, "HX safety override: HX %.0f°C < %.0f°C, forcing pump increase to %.1f Hz",
+                     hx_temp, HX_TEMP_LOW, new_freq);
+        } else if (hx_temp >= HX_TEMP_HIGH && new_freq > pump_freq_setting_) {
+            // HX too hot but thermostat wants to increase - override, force decrease
+            new_freq = pump_freq_setting_ - PUMP_FREQ_STEP;
+            ESP_LOGW(TAG, "HX safety override: HX %.0f°C >= %.0f°C, forcing pump decrease to %.1f Hz",
+                     hx_temp, HX_TEMP_HIGH, new_freq);
+        }
+
+        // Apply new pump frequency within limits
+        new_freq = std::max(PUMP_FREQ_MIN, std::min(PUMP_FREQ_MAX, new_freq));
+        if (new_freq != pump_freq_setting_) {
+            pump_freq_setting_ = new_freq;
+            last_pump_adjust_time_ = now;
         }
     }
 }

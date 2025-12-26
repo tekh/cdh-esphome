@@ -19,6 +19,17 @@ static const uint8_t CMD_NO_CHANGE = 0x00;
 static const uint8_t CMD_STOP = 0x05;
 static const uint8_t CMD_START = 0xA0;
 
+// Run states (Rx Byte[2])
+static const uint8_t RUN_STATE_OFF = 0;
+static const uint8_t RUN_STATE_START_ACK = 1;
+static const uint8_t RUN_STATE_GLOW_PREHEAT = 2;
+static const uint8_t RUN_STATE_FAILED_IGNITION = 3;
+static const uint8_t RUN_STATE_IGNITED = 4;
+static const uint8_t RUN_STATE_RUNNING = 5;
+static const uint8_t RUN_STATE_STOP_ACK = 6;
+static const uint8_t RUN_STATE_POST_GLOW = 7;
+static const uint8_t RUN_STATE_COOLDOWN = 8;
+
 // Temperature limits (from protocol)
 static const uint8_t TEMP_MIN = 8;
 static const uint8_t TEMP_MAX = 35;
@@ -32,9 +43,13 @@ static const uint8_t DEFAULT_MIN_PUMP_FREQ = 0x0E;    // 1.4 Hz
 static const uint8_t DEFAULT_MAX_PUMP_FREQ = 0x32;    // 5.0 Hz
 
 // Pump frequency limits (0.1 Hz units)
-static const float PUMP_FREQ_MIN = 1.0f;   // 1.0 Hz minimum
+static const float PUMP_FREQ_MIN = 1.3f;   // 1.3 Hz minimum (8kW heater)
 static const float PUMP_FREQ_MAX = 5.5f;   // 5.5 Hz maximum (8kW heater)
 static const float PUMP_FREQ_STEP = 0.1f;  // Adjustment step size
+static const float PUMP_FREQ_INITIAL = 1.8f;  // Initial pump frequency for ignition
+
+// Pump adjustment timing - thermal mass means changes take time to show effect
+static const uint32_t PUMP_ADJUST_INTERVAL_MS = 5000;  // 5 seconds between adjustments
 
 // Heat exchanger temperature thresholds (°C)
 static const float HX_TEMP_LOW = 190.0f;      // Below this: increase pump (more fuel)
@@ -43,10 +58,11 @@ static const float HX_TEMP_HIGH = 250.0f;     // At/above this: decrease pump (l
 static const float HX_TEMP_CRITICAL = 265.0f; // Above this: emergency shutdown
 
 // Cooldown parameters
-static const uint16_t COOLDOWN_FAN_RPM = 4200;   // Fan speed during cooldown
+static const uint16_t COOLDOWN_FAN_RPM = 4000;   // Fan speed during cooldown
 static const float COOLDOWN_TARGET_TEMP = 60.0f; // HX temp to reach before stopping fan
 static const uint16_t DEFAULT_MIN_FAN_RPM = 1450;
 static const uint16_t DEFAULT_MAX_FAN_RPM = 4500;
+static const uint16_t IGNITION_FAN_RPM = 2000;   // Fan speed during ignition (HX < 100°C)
 static const uint8_t DEFAULT_FAN_SENSOR = 0x01;       // SN-1
 static const uint8_t DEFAULT_GLOW_POWER = 0x05;
 //static const uint16_t DEFAULT_ALTITUDE = 0x0DAC;      // 3500m
@@ -72,6 +88,7 @@ class HeaterUart : public PollingComponent, public uart::UARTDevice {
   // Configuration setters
   void set_standalone_mode(bool standalone) { this->standalone_mode_ = standalone; }
   void set_operating_voltage(uint8_t voltage) { this->operating_voltage_ = voltage; }
+  void set_temperature_backoff(float offset) { this->temp_backoff_offset_ = offset; }
 
   void setup() override;
   void loop() override;
@@ -133,6 +150,7 @@ class HeaterUart : public PollingComponent, public uart::UARTDevice {
   bool standalone_mode_ = false;
   uint8_t operating_voltage_ = VOLTAGE_12V;
   uint8_t desired_temp_setting_ = 22;  // Our desired temperature (for standalone)
+  float temp_backoff_offset_ = 0.5f;   // Start ramping down this many °C before target
   bool heater_on_request_ = false;     // Whether we want heater on
   uint8_t pending_on_off_command_ = CMD_NO_CHANGE;  // Pending on/off command
   uint32_t last_tx_time_ = 0;          // Last frame transmission time
@@ -141,6 +159,7 @@ class HeaterUart : public PollingComponent, public uart::UARTDevice {
   uint8_t rx_frame_[24];               // Buffer for RX-only frame in standalone
   int rx_frame_index_ = 0;             // Index for RX frame
   bool in_cooldown_ = false;           // Cooldown mode active (fan running to cool HX)
+  uint32_t last_pump_adjust_time_ = 0; // Last time pump frequency was adjusted
 
   // Parsed data
   float current_temperature_value_ = 0;
