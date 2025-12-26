@@ -23,6 +23,23 @@ static const uint8_t CMD_START = 0xA0;
 static const uint8_t TEMP_MIN = 8;
 static const uint8_t TEMP_MAX = 35;
 
+// Operating voltage options
+static const uint8_t VOLTAGE_12V = 0x78;  // 120 = 12.0V
+static const uint8_t VOLTAGE_24V = 0xF0;  // 240 = 24.0V
+
+// Default frame parameters (from Afterburner project)
+static const uint8_t DEFAULT_MIN_PUMP_FREQ = 0x0E;    // 1.4 Hz
+static const uint8_t DEFAULT_MAX_PUMP_FREQ = 0x32;    // 5.0 Hz
+static const uint16_t DEFAULT_MIN_FAN_RPM = 1450;
+static const uint16_t DEFAULT_MAX_FAN_RPM = 4500;
+static const uint8_t DEFAULT_FAN_SENSOR = 0x01;       // SN-1
+static const uint8_t DEFAULT_GLOW_POWER = 0x05;
+static const uint16_t DEFAULT_ALTITUDE = 0x0DAC;      // 3500m
+
+// Standalone mode timing
+static const uint32_t STANDALONE_TX_INTERVAL_MS = 1000;  // 1 Hz
+static const uint32_t STANDALONE_RX_TIMEOUT_MS = 200;    // Wait for response (heater responds in ~100-130ms)
+
 class HeaterUart : public PollingComponent, public uart::UARTDevice {
  public:
   HeaterUart() = default;
@@ -33,6 +50,11 @@ class HeaterUart : public PollingComponent, public uart::UARTDevice {
   void set_binary_sensor(const std::string &key, binary_sensor::BinarySensor *binary_sensor);
   void set_power_switch(switch_::Switch *sw) { this->power_switch_ = sw; }
   void set_temperature_number(number::Number *num) { this->temperature_number_ = num; }
+  void set_temperature_sensor(sensor::Sensor *sensor) { this->external_temp_sensor_ = sensor; }
+
+  // Configuration setters
+  void set_standalone_mode(bool standalone) { this->standalone_mode_ = standalone; }
+  void set_operating_voltage(uint8_t voltage) { this->operating_voltage_ = voltage; }
 
   void setup() override;
   void loop() override;
@@ -46,6 +68,7 @@ class HeaterUart : public PollingComponent, public uart::UARTDevice {
   // State accessors
   bool get_on_off_state() const { return on_off_value_; }
   int get_desired_temperature() const { return desired_temperature_value_; }
+  bool is_standalone_mode() const { return standalone_mode_; }
 
  protected:
   // Sensor storage
@@ -58,6 +81,9 @@ class HeaterUart : public PollingComponent, public uart::UARTDevice {
 
   // Temperature number reference (for state sync)
   number::Number *temperature_number_{nullptr};
+
+  // External temperature sensor (for standalone mode)
+  sensor::Sensor *external_temp_sensor_{nullptr};
 
   // Frame handling
   uint8_t frame_[48];
@@ -78,6 +104,18 @@ class HeaterUart : public PollingComponent, public uart::UARTDevice {
   bool awaiting_inject_response_ = false;
   uint32_t inject_response_timeout_ = 0;
 
+  // Standalone mode settings
+  bool standalone_mode_ = false;
+  uint8_t operating_voltage_ = VOLTAGE_12V;
+  uint8_t desired_temp_setting_ = 22;  // Our desired temperature (for standalone)
+  bool heater_on_request_ = false;     // Whether we want heater on
+  uint8_t pending_on_off_command_ = CMD_NO_CHANGE;  // Pending on/off command
+  uint32_t last_tx_time_ = 0;          // Last frame transmission time
+  bool awaiting_rx_ = false;           // Waiting for heater response
+  uint32_t rx_timeout_ = 0;            // RX timeout timestamp
+  uint8_t rx_frame_[24];               // Buffer for RX-only frame in standalone
+  int rx_frame_index_ = 0;             // Index for RX frame
+
   // Parsed data
   float current_temperature_value_ = 0;
   int fan_speed_value_ = 0;
@@ -96,9 +134,15 @@ class HeaterUart : public PollingComponent, public uart::UARTDevice {
   std::string error_code_description_ = "Unknown";
 
   void parse_frame(const uint8_t *frame, size_t length);
+  void parse_rx_frame(const uint8_t *frame, size_t length);
   void reset_frame();
   void send_command(uint8_t command, uint8_t temperature = 0);
   uint16_t calc_crc16(const uint8_t *data, size_t length);
+
+  // Standalone mode methods
+  void standalone_loop();
+  void build_tx_frame(uint8_t *frame, uint8_t command);
+  void send_standalone_frame();
 
   // Mappings for error and run states
   static const std::map<int, std::string> run_state_map;

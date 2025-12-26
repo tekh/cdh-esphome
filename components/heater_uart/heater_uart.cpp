@@ -1,5 +1,6 @@
 #include "heater_uart.h"
 #include "esphome/core/log.h"
+#include <cmath>
 
 namespace esphome {
 namespace heater_uart {
@@ -60,9 +61,25 @@ const std::map<int, std::string> HeaterUart::error_code_map = {
 void HeaterUart::setup() {
     ESP_LOGCONFIG(TAG, "Setting up Heater UART...");
     memset(last_tx_frame_, 0, sizeof(last_tx_frame_));
+    memset(rx_frame_, 0, sizeof(rx_frame_));
+
+    if (standalone_mode_) {
+        ESP_LOGI(TAG, "Running in STANDALONE mode - ESP32 is the heater controller");
+        ESP_LOGI(TAG, "Operating voltage: %s", operating_voltage_ == VOLTAGE_12V ? "12V" : "24V");
+        ESP_LOGI(TAG, "Initial desired temperature: %d°C", desired_temp_setting_);
+    } else {
+        ESP_LOGI(TAG, "Running in INJECTION mode - working alongside LCD controller");
+    }
 }
 
 void HeaterUart::loop() {
+    // Use different loop logic depending on mode
+    if (standalone_mode_) {
+        standalone_loop();
+        return;
+    }
+
+    // === INJECTION MODE (original logic) ===
     const int FRAME_SIZE = 48;
     const int TX_FRAME_END_INDEX = 23;
     const int RX_FRAME_START_INDEX = 24;
@@ -227,34 +244,53 @@ void HeaterUart::set_binary_sensor(const std::string &key, binary_sensor::Binary
 }
 
 void HeaterUart::turn_on() {
-    if (!has_valid_tx_frame_) {
-        ESP_LOGW(TAG, "Cannot turn on - no valid TX frame captured yet");
-        return;
+    if (standalone_mode_) {
+        ESP_LOGI(TAG, "Queuing START command (standalone mode)");
+        pending_on_off_command_ = CMD_START;
+        heater_on_request_ = true;
+    } else {
+        if (!has_valid_tx_frame_) {
+            ESP_LOGW(TAG, "Cannot turn on - no valid TX frame captured yet");
+            return;
+        }
+        ESP_LOGI(TAG, "Queuing START command (injection mode)");
+        pending_command_ = CMD_START;
     }
-    ESP_LOGI(TAG, "Queuing START command");
-    pending_command_ = CMD_START;
 }
 
 void HeaterUart::turn_off() {
-    if (!has_valid_tx_frame_) {
-        ESP_LOGW(TAG, "Cannot turn off - no valid TX frame captured yet");
-        return;
+    if (standalone_mode_) {
+        ESP_LOGI(TAG, "Queuing STOP command (standalone mode)");
+        pending_on_off_command_ = CMD_STOP;
+        heater_on_request_ = false;
+    } else {
+        if (!has_valid_tx_frame_) {
+            ESP_LOGW(TAG, "Cannot turn off - no valid TX frame captured yet");
+            return;
+        }
+        ESP_LOGI(TAG, "Queuing STOP command (injection mode)");
+        pending_command_ = CMD_STOP;
     }
-    ESP_LOGI(TAG, "Queuing STOP command");
-    pending_command_ = CMD_STOP;
 }
 
 void HeaterUart::set_desired_temperature(uint8_t temperature) {
-    if (!has_valid_tx_frame_) {
-        ESP_LOGW(TAG, "Cannot set temperature - no valid TX frame captured yet");
-        return;
-    }
     if (temperature < TEMP_MIN || temperature > TEMP_MAX) {
         ESP_LOGW(TAG, "Temperature %d out of range (%d-%d)", temperature, TEMP_MIN, TEMP_MAX);
         return;
     }
-    ESP_LOGI(TAG, "Queuing temperature change to %d°C", temperature);
-    pending_temperature_ = temperature;
+
+    if (standalone_mode_) {
+        ESP_LOGI(TAG, "Setting desired temperature to %d°C (standalone mode)", temperature);
+        desired_temp_setting_ = temperature;
+        // Temperature will be sent in next frame automatically
+    } else {
+        if (!has_valid_tx_frame_) {
+            ESP_LOGW(TAG, "Cannot set temperature - no valid TX frame captured yet");
+            return;
+        }
+        ESP_LOGI(TAG, "Queuing temperature change to %d°C (injection mode)", temperature);
+        pending_temperature_ = temperature;
+    }
 }
 
 void HeaterUart::send_command(uint8_t command, uint8_t temperature) {
@@ -310,6 +346,241 @@ uint16_t HeaterUart::calc_crc16(const uint8_t *data, size_t length) {
         crc = (crc >> 8) ^ CRC16_TABLE[index];
     }
     return crc;
+}
+
+// ==================== STANDALONE MODE IMPLEMENTATION ====================
+
+void HeaterUart::standalone_loop() {
+    uint32_t now = millis();
+
+    // If we're waiting for RX response
+    if (awaiting_rx_) {
+        while (available()) {
+            uint8_t byte = read();
+
+            // If we haven't started the frame yet, look for start marker
+            if (rx_frame_index_ == 0) {
+                if (byte == 0x76) {
+                    rx_frame_[rx_frame_index_++] = byte;
+                }
+                // else discard byte (still looking for sync)
+            } else {
+                // Already synced, collect remaining bytes
+                rx_frame_[rx_frame_index_++] = byte;
+
+                // Check if we have a complete frame
+                if (rx_frame_index_ >= 24) {
+                    ESP_LOGD(TAG, "RX: %02X %02X %02X %02X %02X %02X %02X %02X ...",
+                             rx_frame_[0], rx_frame_[1], rx_frame_[2], rx_frame_[3],
+                             rx_frame_[4], rx_frame_[5], rx_frame_[6], rx_frame_[7]);
+                    parse_rx_frame(rx_frame_, 24);
+                    awaiting_rx_ = false;
+                    rx_frame_index_ = 0;
+                    return;
+                }
+            }
+        }
+
+        // Check for timeout
+        if (now > rx_timeout_) {
+            if (rx_frame_index_ > 0) {
+                ESP_LOGW(TAG, "RX timeout after %d bytes received", rx_frame_index_);
+            } else {
+                ESP_LOGW(TAG, "RX timeout - no response from heater");
+            }
+            awaiting_rx_ = false;
+            rx_frame_index_ = 0;
+        }
+
+        return;
+    }
+
+    // Time to send next frame?
+    if (now - last_tx_time_ >= STANDALONE_TX_INTERVAL_MS) {
+        send_standalone_frame();
+        last_tx_time_ = now;
+    }
+}
+
+void HeaterUart::build_tx_frame(uint8_t *frame, uint8_t command) {
+    // Clear frame
+    memset(frame, 0, 24);
+
+    // Byte 0: Start marker
+    frame[0] = 0x76;
+
+    // Byte 1: Protocol version
+    frame[1] = 0x16;
+
+    // Byte 2: Command
+    frame[2] = command;
+
+    // Byte 3: Current temperature
+    // In standalone mode, use external temperature sensor if available
+    if (external_temp_sensor_ != nullptr && !std::isnan(external_temp_sensor_->state)) {
+        frame[3] = static_cast<uint8_t>(external_temp_sensor_->state);
+        current_temperature_value_ = external_temp_sensor_->state;
+    } else if (current_temperature_value_ > 0) {
+        frame[3] = static_cast<uint8_t>(current_temperature_value_);
+    } else {
+        frame[3] = desired_temp_setting_;  // Fallback if no reading yet
+    }
+
+    // Byte 4: Desired temperature
+    frame[4] = desired_temp_setting_;
+
+    // Byte 5: Min pump frequency (0.1 Hz units)
+    frame[5] = DEFAULT_MIN_PUMP_FREQ;
+
+    // Byte 6: Max pump frequency (0.1 Hz units)
+    frame[6] = DEFAULT_MAX_PUMP_FREQ;
+
+    // Bytes 7-8: Min fan RPM (big endian)
+    frame[7] = (DEFAULT_MIN_FAN_RPM >> 8) & 0xFF;
+    frame[8] = DEFAULT_MIN_FAN_RPM & 0xFF;
+
+    // Bytes 9-10: Max fan RPM (big endian)
+    frame[9] = (DEFAULT_MAX_FAN_RPM >> 8) & 0xFF;
+    frame[10] = DEFAULT_MAX_FAN_RPM & 0xFF;
+
+    // Byte 11: Operating voltage
+    frame[11] = operating_voltage_;
+
+    // Byte 12: Fan sensor type
+    frame[12] = DEFAULT_FAN_SENSOR;
+
+    // Byte 13: Glow plug power
+    frame[13] = DEFAULT_GLOW_POWER;
+
+    // Bytes 14-15: Reserved (zeros)
+    frame[14] = 0x00;
+    frame[15] = 0x00;
+
+    // Bytes 16-17: Prime pump frequency (zeros = no priming)
+    frame[16] = 0x00;
+    frame[17] = 0x00;
+
+    // Bytes 18-19: Unknown/reserved
+    frame[18] = 0x00;
+    frame[19] = 0x00;
+
+    // Bytes 20-21: Altitude (big endian)
+    frame[20] = (DEFAULT_ALTITUDE >> 8) & 0xFF;
+    frame[21] = DEFAULT_ALTITUDE & 0xFF;
+
+    // Calculate and append CRC-16/MODBUS
+    uint16_t crc = calc_crc16(frame, 22);
+    frame[22] = (crc >> 8) & 0xFF;  // MSB first
+    frame[23] = crc & 0xFF;
+}
+
+void HeaterUart::send_standalone_frame() {
+    uint8_t tx_frame[24];
+    uint8_t command = CMD_NO_CHANGE;
+
+    // Check for pending on/off command
+    if (pending_on_off_command_ != CMD_NO_CHANGE) {
+        command = pending_on_off_command_;
+        pending_on_off_command_ = CMD_NO_CHANGE;
+        ESP_LOGI(TAG, "Sending %s command", command == CMD_START ? "START" : "STOP");
+    }
+
+    // Build the frame
+    build_tx_frame(tx_frame, command);
+
+    // Log frame (debug level to reduce spam)
+    ESP_LOGD(TAG, "TX: %02X %02X %02X %02X %02X %02X %02X %02X ...",
+             tx_frame[0], tx_frame[1], tx_frame[2], tx_frame[3],
+             tx_frame[4], tx_frame[5], tx_frame[6], tx_frame[7]);
+
+    // Send frame
+    write_array(tx_frame, 24);
+    flush();
+
+    // On half-duplex single-wire, we receive our own TX as echo.
+    // Wait briefly for TX to complete, then discard the echo.
+    delay(15);  // ~15ms for 24 bytes at 25000 baud (24*10/25000 = 9.6ms) + margin
+
+    // Discard TX echo (24 bytes)
+    int discarded = 0;
+    while (available() && discarded < 24) {
+        read();
+        discarded++;
+    }
+    ESP_LOGD(TAG, "Discarded %d echo bytes", discarded);
+
+    // Set up RX wait for heater response
+    awaiting_rx_ = true;
+    rx_timeout_ = millis() + STANDALONE_RX_TIMEOUT_MS;
+    rx_frame_index_ = 0;
+}
+
+void HeaterUart::parse_rx_frame(const uint8_t *frame, size_t length) {
+    if (length != 24) {
+        ESP_LOGW(TAG, "Invalid RX frame length: %d bytes (expected 24)", length);
+        return;
+    }
+
+    // Validate CRC (optional but recommended)
+    uint16_t received_crc = (frame[22] << 8) | frame[23];
+    uint16_t calculated_crc = calc_crc16(frame, 22);
+    if (received_crc != calculated_crc) {
+        ESP_LOGW(TAG, "RX CRC mismatch: received 0x%04X, calculated 0x%04X", received_crc, calculated_crc);
+        // Continue parsing anyway - some heaters may have CRC issues
+    }
+
+    // Parse response frame (same structure as bytes 24-47 in injection mode)
+    // Byte 0: 0x76 start marker
+    // Byte 1: Protocol version
+    // Byte 2: Run state
+    run_state_value_ = frame[2];
+
+    // Byte 3: On/off state (1 = on)
+    on_off_value_ = frame[3] == 1;
+
+    // Bytes 4-5: Supply voltage (big endian, 0.1V units)
+    supply_voltage_value_ = ((frame[4] << 8) | frame[5]) * 0.1f;
+
+    // Bytes 6-7: Fan speed RPM (big endian)
+    fan_speed_value_ = (frame[6] << 8) | frame[7];
+
+    // Bytes 8-9: Fan voltage (big endian, 0.1V units)
+    fan_voltage_value_ = ((frame[8] << 8) | frame[9]) * 0.1f;
+
+    // Bytes 10-11: Heat exchanger temperature (big endian)
+    heat_exchanger_temp_value_ = (frame[10] << 8) | frame[11];
+
+    // Bytes 12-13: Glow plug voltage (big endian, 0.1V units)
+    glow_plug_voltage_value_ = ((frame[12] << 8) | frame[13]) * 0.1f;
+
+    // Bytes 14-15: Glow plug current (big endian, 0.01A units)
+    glow_plug_current_value_ = ((frame[14] << 8) | frame[15]) * 0.01f;
+
+    // Byte 16: Pump frequency (0.1 Hz units)
+    pump_frequency_value_ = frame[16] * 0.1f;
+
+    // Byte 17: Error code
+    error_code_value_ = frame[17];
+
+    // Note: Current temperature comes from our TX frame (byte 3), not RX
+    // In standalone mode, we'd need an external sensor - for now use heat exchanger
+    // or keep the last value
+
+    // Update desired temperature to reflect what we're sending
+    desired_temperature_value_ = desired_temp_setting_;
+
+    // Map run state and error code to descriptions
+    run_state_description_ = run_state_map.count(run_state_value_)
+                                ? run_state_map.at(run_state_value_)
+                                : "Unknown Run State";
+
+    error_code_description_ = error_code_map.count(error_code_value_)
+                                ? error_code_map.at(error_code_value_)
+                                : "Unknown Error Code";
+
+    ESP_LOGD(TAG, "RX: State=%d (%s), OnOff=%d, Fan=%d RPM, Supply=%.1fV, Error=%d",
+             run_state_value_, run_state_description_.c_str(), on_off_value_,
+             fan_speed_value_, supply_voltage_value_, error_code_value_);
 }
 
 }  // namespace heater_uart
