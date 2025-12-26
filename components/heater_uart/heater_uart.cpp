@@ -107,11 +107,13 @@ void HeaterUart::loop() {
 
                     parse_frame(frame_, FRAME_SIZE);
 
-                    // Check if we have a pending command to inject
-                    if (pending_command_ != CMD_NO_CHANGE && has_valid_tx_frame_) {
-                        ESP_LOGI(TAG, "Injecting command 0x%02X", pending_command_);
-                        send_command(pending_command_);
+                    // Check if we have a pending command or temperature to inject
+                    if ((pending_command_ != CMD_NO_CHANGE || pending_temperature_ != 0) && has_valid_tx_frame_) {
+                        ESP_LOGI(TAG, "Injecting frame - command: 0x%02X, temperature: %d",
+                                 pending_command_, pending_temperature_);
+                        send_command(pending_command_, pending_temperature_);
                         pending_command_ = CMD_NO_CHANGE;
+                        pending_temperature_ = 0;
                     }
                 } else {
                     ESP_LOGW(TAG, "Invalid Receive Packet or incorrect order. Resetting frame.");
@@ -168,6 +170,11 @@ void HeaterUart::update() {
     // Sync power switch state with actual heater state
     if (power_switch_ != nullptr) {
         power_switch_->publish_state(on_off_value_);
+    }
+
+    // Sync temperature number with actual desired temperature
+    if (temperature_number_ != nullptr) {
+        temperature_number_->publish_state(desired_temperature_value_);
     }
 }
 
@@ -237,14 +244,34 @@ void HeaterUart::turn_off() {
     pending_command_ = CMD_STOP;
 }
 
-void HeaterUart::send_command(uint8_t command) {
+void HeaterUart::set_desired_temperature(uint8_t temperature) {
+    if (!has_valid_tx_frame_) {
+        ESP_LOGW(TAG, "Cannot set temperature - no valid TX frame captured yet");
+        return;
+    }
+    if (temperature < TEMP_MIN || temperature > TEMP_MAX) {
+        ESP_LOGW(TAG, "Temperature %d out of range (%d-%d)", temperature, TEMP_MIN, TEMP_MAX);
+        return;
+    }
+    ESP_LOGI(TAG, "Queuing temperature change to %d°C", temperature);
+    pending_temperature_ = temperature;
+}
+
+void HeaterUart::send_command(uint8_t command, uint8_t temperature) {
     uint8_t tx_frame[24];
 
     // Copy the last LCD TX frame as base
     memcpy(tx_frame, last_tx_frame_, 24);
 
-    // Modify the command byte (byte 2)
-    tx_frame[2] = command;
+    // Modify the command byte (byte 2) if not CMD_NO_CHANGE
+    if (command != CMD_NO_CHANGE) {
+        tx_frame[2] = command;
+    }
+
+    // Modify the temperature byte (byte 4) if specified (non-zero)
+    if (temperature != 0) {
+        tx_frame[4] = temperature;
+    }
 
     // Recalculate CRC-16/MODBUS for bytes 0-21
     uint16_t crc = calc_crc16(tx_frame, 22);
