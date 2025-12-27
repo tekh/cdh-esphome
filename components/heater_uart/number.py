@@ -38,7 +38,7 @@ TEMPERATURE_SCHEMA = (
             cv.GenerateID(CONF_HEATER_UART_ID): cv.use_id(HeaterUart),
             cv.Optional(CONF_MIN_VALUE, default=8): cv.float_,
             cv.Optional(CONF_MAX_VALUE, default=35): cv.float_,
-            cv.Optional(CONF_STEP, default=1): cv.float_,
+            cv.Optional(CONF_STEP, default=0.5): cv.float_,
         }
     )
     .extend(cv.COMPONENT_SCHEMA)

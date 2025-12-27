@@ -9,6 +9,7 @@ DEPENDENCIES = ["heater_uart"]
 
 BINARY_SENSORS = {
     "on_off_state": ("On/Off State", DEVICE_CLASS_POWER),
+    "auto_shutdown_active": ("Auto Shutdown Active", DEVICE_CLASS_POWER),
 }
 
 CONFIG_SCHEMA = cv.Schema(

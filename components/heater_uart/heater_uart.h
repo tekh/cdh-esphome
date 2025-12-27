@@ -84,12 +84,16 @@ class HeaterUart : public PollingComponent, public uart::UARTDevice {
   void set_temperature_number(number::Number *num) { this->temperature_number_ = num; }
   void set_temperature_sensor(sensor::Sensor *sensor) { this->external_temp_sensor_ = sensor; }
   void set_pump_number(number::Number *num) { this->pump_number_ = num; }
+  void set_auto_shutdown_switch(switch_::Switch *sw) { this->auto_shutdown_switch_ = sw; }
 
   // Configuration setters
   void set_standalone_mode(bool standalone) { this->standalone_mode_ = standalone; }
   void set_operating_voltage(uint8_t voltage) { this->operating_voltage_ = voltage; }
   void set_temperature_backoff(float offset) { this->temp_backoff_offset_ = offset; }
   void set_altitude(uint16_t altitude) { this->altitude_ = altitude; }
+  void set_auto_shutdown_overshoot(float overshoot) { this->auto_shutdown_overshoot_ = overshoot; }
+  void set_auto_shutdown_hysteresis(float hysteresis) { this->auto_shutdown_hysteresis_ = hysteresis; }
+  void set_auto_shutdown_enabled(bool enabled) { this->auto_shutdown_enabled_ = enabled; }
 
   void setup() override;
   void loop() override;
@@ -98,7 +102,7 @@ class HeaterUart : public PollingComponent, public uart::UARTDevice {
   // Command methods
   void turn_on();
   void turn_off();
-  void set_desired_temperature(uint8_t temperature);
+  void set_desired_temperature(float temperature);
   void set_pump_frequency(float frequency);
 
   // State accessors
@@ -106,6 +110,7 @@ class HeaterUart : public PollingComponent, public uart::UARTDevice {
   int get_desired_temperature() const { return desired_temperature_value_; }
   float get_pump_frequency_setting() const { return pump_freq_setting_; }
   bool is_standalone_mode() const { return standalone_mode_; }
+  bool is_in_auto_shutdown() const { return in_auto_shutdown_; }
 
  protected:
   // Sensor storage
@@ -124,6 +129,9 @@ class HeaterUart : public PollingComponent, public uart::UARTDevice {
 
   // Pump frequency number reference (for state sync)
   number::Number *pump_number_{nullptr};
+
+  // Auto-shutdown switch reference (for state sync)
+  switch_::Switch *auto_shutdown_switch_{nullptr};
 
   // Pump frequency setting (Hz, for fixed Hz mode)
   float pump_freq_setting_ = 1.6f;  // Default to low pump rate
@@ -150,18 +158,24 @@ class HeaterUart : public PollingComponent, public uart::UARTDevice {
   // Standalone mode settings
   bool standalone_mode_ = false;
   uint8_t operating_voltage_ = VOLTAGE_12V;
-  uint16_t altitude_ = 750;            // Altitude in metres (affects combustion)
-  uint8_t desired_temp_setting_ = 22;  // Our desired temperature (for standalone)
-  float temp_backoff_offset_ = 0.5f;   // Start ramping down this many °C before target
-  bool heater_on_request_ = false;     // Whether we want heater on
+  uint16_t altitude_ = 750;              // Altitude in metres (affects combustion)
+  float desired_temp_setting_ = 22.0f;   // Our desired temperature (for standalone)
+  float temp_backoff_offset_ = 0.5f;     // Start ramping down this many °C before target
+  bool heater_on_request_ = false;       // Whether we want heater on
   uint8_t pending_on_off_command_ = CMD_NO_CHANGE;  // Pending on/off command
-  uint32_t last_tx_time_ = 0;          // Last frame transmission time
-  bool awaiting_rx_ = false;           // Waiting for heater response
-  uint32_t rx_timeout_ = 0;            // RX timeout timestamp
-  uint8_t rx_frame_[24];               // Buffer for RX-only frame in standalone
-  int rx_frame_index_ = 0;             // Index for RX frame
-  bool in_cooldown_ = false;           // Cooldown mode active (fan running to cool HX)
-  uint32_t last_pump_adjust_time_ = 0; // Last time pump frequency was adjusted
+  uint32_t last_tx_time_ = 0;            // Last frame transmission time
+  bool awaiting_rx_ = false;             // Waiting for heater response
+  uint32_t rx_timeout_ = 0;              // RX timeout timestamp
+  uint8_t rx_frame_[24];                 // Buffer for RX-only frame in standalone
+  int rx_frame_index_ = 0;               // Index for RX frame
+  bool in_cooldown_ = false;             // Cooldown mode active (fan running to cool HX)
+  uint32_t last_pump_adjust_time_ = 0;   // Last time pump frequency was adjusted
+
+  // Auto-shutdown configuration
+  float auto_shutdown_overshoot_ = 0.5f;   // Temperature overshoot before auto-shutdown (°C)
+  float auto_shutdown_hysteresis_ = 1.5f;  // Temperature drop before auto-restart (°C)
+  bool auto_shutdown_enabled_ = true;      // Auto-shutdown feature enabled
+  bool in_auto_shutdown_ = false;          // Currently in auto-shutdown state
 
   // Parsed data
   float current_temperature_value_ = 0;

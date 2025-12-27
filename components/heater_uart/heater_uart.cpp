@@ -183,11 +183,18 @@ void HeaterUart::update() {
 
         if (key == "on_off_state")
             binary_sensor->publish_state(on_off_value_);
+        else if (key == "auto_shutdown_active")
+            binary_sensor->publish_state(in_auto_shutdown_);
     }
 
     // Sync power switch state with actual heater state
     if (power_switch_ != nullptr) {
         power_switch_->publish_state(on_off_value_);
+    }
+
+    // Sync auto-shutdown switch state
+    if (auto_shutdown_switch_ != nullptr) {
+        auto_shutdown_switch_->publish_state(auto_shutdown_enabled_);
     }
 
     // Sync temperature number with actual desired temperature
@@ -274,6 +281,7 @@ void HeaterUart::turn_off() {
         pending_on_off_command_ = CMD_STOP;
         heater_on_request_ = false;
         in_cooldown_ = true;  // Start cooldown sequence
+        in_auto_shutdown_ = false;  // Manual turn off clears auto-shutdown state
     } else {
         if (!has_valid_tx_frame_) {
             ESP_LOGW(TAG, "Cannot turn off - no valid TX frame captured yet");
@@ -284,23 +292,26 @@ void HeaterUart::turn_off() {
     }
 }
 
-void HeaterUart::set_desired_temperature(uint8_t temperature) {
-    if (temperature < TEMP_MIN || temperature > TEMP_MAX) {
-        ESP_LOGW(TAG, "Temperature %d out of range (%d-%d)", temperature, TEMP_MIN, TEMP_MAX);
+void HeaterUart::set_desired_temperature(float temperature) {
+    // Round to nearest 0.5 degree
+    float rounded = std::round(temperature * 2.0f) / 2.0f;
+
+    if (rounded < TEMP_MIN || rounded > TEMP_MAX) {
+        ESP_LOGW(TAG, "Temperature %.1f out of range (%d-%d)", rounded, TEMP_MIN, TEMP_MAX);
         return;
     }
 
     if (standalone_mode_) {
-        ESP_LOGI(TAG, "Setting desired temperature to %d°C (standalone mode)", temperature);
-        desired_temp_setting_ = temperature;
+        ESP_LOGI(TAG, "Setting desired temperature to %.1f°C (standalone mode)", rounded);
+        desired_temp_setting_ = rounded;
         // Temperature will be sent in next frame automatically
     } else {
         if (!has_valid_tx_frame_) {
             ESP_LOGW(TAG, "Cannot set temperature - no valid TX frame captured yet");
             return;
         }
-        ESP_LOGI(TAG, "Queuing temperature change to %d°C (injection mode)", temperature);
-        pending_temperature_ = temperature;
+        ESP_LOGI(TAG, "Queuing temperature change to %.1f°C (injection mode)", rounded);
+        pending_temperature_ = static_cast<uint8_t>(std::round(rounded));
     }
 }
 
@@ -446,11 +457,11 @@ void HeaterUart::build_tx_frame(uint8_t *frame, uint8_t command) {
     } else if (current_temperature_value_ > 0) {
         frame[3] = static_cast<uint8_t>(current_temperature_value_);
     } else {
-        frame[3] = desired_temp_setting_;  // Fallback if no reading yet
+        frame[3] = static_cast<uint8_t>(std::round(desired_temp_setting_));  // Fallback if no reading yet
     }
 
-    // Byte 4: Desired temperature
-    frame[4] = desired_temp_setting_;
+    // Byte 4: Desired temperature (convert float to uint8_t for protocol)
+    frame[4] = static_cast<uint8_t>(std::round(desired_temp_setting_));
 
     // Bytes 5-6: Pump frequency (0.1 Hz units)
     // Set both min and max to same value for fixed Hz mode (direct pump control)
@@ -738,6 +749,43 @@ void HeaterUart::parse_rx_frame(const uint8_t *frame, size_t length) {
         if (new_freq != pump_freq_setting_) {
             pump_freq_setting_ = new_freq;
             last_pump_adjust_time_ = now;
+        }
+
+        // === AUTO-SHUTDOWN LOGIC ===
+        // Check if conditions are met for auto-shutdown:
+        // - Pump at minimum (can't reduce further)
+        // - Room temperature exceeds target + overshoot threshold
+        // - Auto-shutdown feature is enabled
+        const float PUMP_EPSILON = 0.05f;  // Tolerance for pump frequency comparison
+        bool pump_at_min = (pump_freq_setting_ <= PUMP_FREQ_MIN + PUMP_EPSILON);
+        bool temp_overshoot = (room_temp > target_temp + auto_shutdown_overshoot_);
+
+        if (auto_shutdown_enabled_ && pump_at_min && temp_overshoot && !in_auto_shutdown_) {
+            ESP_LOGI(TAG, "Auto-shutdown: pump at min (%.1f Hz), room %.1f°C > target %.1f°C + %.1f°C overshoot",
+                     pump_freq_setting_, room_temp, target_temp, auto_shutdown_overshoot_);
+            pending_on_off_command_ = CMD_STOP;
+            heater_on_request_ = false;
+            in_cooldown_ = true;
+            in_auto_shutdown_ = true;
+        }
+    }
+
+    // === AUTO-RESTART LOGIC ===
+    // Check if heater should auto-restart from auto-shutdown state
+    // This runs when heater is off and was auto-shutdown (not manual off)
+    if (!on_off_value_ && in_auto_shutdown_ && auto_shutdown_enabled_ && standalone_mode_) {
+        float room_temp = current_temperature_value_;
+        float target_temp = desired_temp_setting_;
+        float restart_threshold = target_temp - auto_shutdown_hysteresis_;
+
+        if (room_temp < restart_threshold) {
+            ESP_LOGI(TAG, "Auto-restart: room %.1f°C < target %.1f°C - %.1f°C hysteresis",
+                     room_temp, target_temp, auto_shutdown_hysteresis_);
+            pending_on_off_command_ = CMD_START;
+            heater_on_request_ = true;
+            pump_freq_setting_ = PUMP_FREQ_INITIAL;
+            last_pump_adjust_time_ = millis();
+            in_auto_shutdown_ = false;
         }
     }
 }

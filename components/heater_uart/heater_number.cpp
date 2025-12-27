@@ -1,5 +1,6 @@
 #include "heater_number.h"
 #include "esphome/core/log.h"
+#include <cmath>
 
 namespace esphome {
 namespace heater_uart {
@@ -24,16 +25,16 @@ void HeaterTemperatureNumber::control(float value) {
         return;
     }
 
-    // Clamp and round the value to an integer
-    uint8_t temp = static_cast<uint8_t>(value);
-    if (temp < TEMP_MIN) temp = TEMP_MIN;
-    if (temp > TEMP_MAX) temp = TEMP_MAX;
+    // Round to nearest 0.5 degree and clamp
+    float rounded = std::round(value * 2.0f) / 2.0f;
+    if (rounded < TEMP_MIN) rounded = TEMP_MIN;
+    if (rounded > TEMP_MAX) rounded = TEMP_MAX;
 
-    ESP_LOGI(TAG, "Setting desired temperature to %d°C", temp);
-    this->parent_->set_desired_temperature(temp);
+    ESP_LOGI(TAG, "Setting desired temperature to %.1f°C", rounded);
+    this->parent_->set_desired_temperature(rounded);
 
     // Publish state immediately (optimistic)
-    this->publish_state(temp);
+    this->publish_state(rounded);
 }
 
 }  // namespace heater_uart

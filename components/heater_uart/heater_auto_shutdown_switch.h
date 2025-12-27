@@ -3,12 +3,11 @@
 #include "esphome/core/component.h"
 #include "esphome/components/switch/switch.h"
 #include "heater_uart.h"
-#include "heater_auto_shutdown_switch.h"
 
 namespace esphome {
 namespace heater_uart {
 
-class HeaterSwitch : public switch_::Switch, public Component {
+class HeaterAutoShutdownSwitch : public switch_::Switch, public Component {
  public:
   void set_parent(HeaterUart *parent) { this->parent_ = parent; }
 
