@@ -185,16 +185,8 @@ void HeaterUart::update() {
             binary_sensor->publish_state(on_off_value_);
         else if (key == "auto_shutdown_active")
             binary_sensor->publish_state(in_auto_shutdown_);
-    }
-
-    // Sync power switch state with actual heater state
-    if (power_switch_ != nullptr) {
-        power_switch_->publish_state(on_off_value_);
-    }
-
-    // Sync auto-shutdown switch state
-    if (auto_shutdown_switch_ != nullptr) {
-        auto_shutdown_switch_->publish_state(auto_shutdown_enabled_);
+        else if (key == "standby_active")
+            binary_sensor->publish_state(in_standby_);
     }
 
     // Sync temperature number with actual desired temperature
@@ -325,6 +317,65 @@ void HeaterUart::set_pump_frequency(float frequency) {
     ESP_LOGI(TAG, "Setting pump frequency to %.1f Hz", frequency);
     pump_freq_setting_ = frequency;
     // Frequency will be sent in next frame automatically (standalone mode)
+}
+
+void HeaterUart::set_heater_mode(HeaterMode mode) {
+    HeaterMode old_mode = heater_mode_;
+    heater_mode_ = mode;
+
+    const char *mode_str = (mode == HeaterMode::OFF) ? "Off" :
+                           (mode == HeaterMode::AUTO) ? "Auto" : "On";
+    ESP_LOGI(TAG, "Heater mode set to: %s", mode_str);
+
+    if (mode == HeaterMode::OFF) {
+        // Force off - stop heater if running
+        if (on_off_value_ || heater_on_request_) {
+            ESP_LOGI(TAG, "Mode Off: stopping heater");
+            pending_on_off_command_ = CMD_STOP;
+            heater_on_request_ = false;
+            in_cooldown_ = true;
+        }
+        in_standby_ = false;
+        in_auto_shutdown_ = false;
+
+    } else if (mode == HeaterMode::AUTO) {
+        // Check if we should start or enter standby
+        float room_temp = current_temperature_value_;
+        float threshold = desired_temp_setting_ - auto_shutdown_hysteresis_;
+
+        if (room_temp < threshold) {
+            // Cold enough - start heater
+            ESP_LOGI(TAG, "Mode Auto: room %.1f°C < %.1f°C threshold, starting heater",
+                     room_temp, threshold);
+            pending_on_off_command_ = CMD_START;
+            heater_on_request_ = true;
+            pump_freq_setting_ = PUMP_FREQ_INITIAL;
+            last_pump_adjust_time_ = millis();
+            in_standby_ = false;
+        } else {
+            // Too warm - enter standby, wait for temp drop
+            ESP_LOGI(TAG, "Mode Auto: room %.1f°C >= %.1f°C threshold, entering standby",
+                     room_temp, threshold);
+            in_standby_ = true;
+            // If heater is running, stop it
+            if (on_off_value_ || heater_on_request_) {
+                pending_on_off_command_ = CMD_STOP;
+                heater_on_request_ = false;
+                in_cooldown_ = true;
+            }
+        }
+        in_auto_shutdown_ = false;
+
+    } else if (mode == HeaterMode::ON) {
+        // Force on - start heater regardless of temperature
+        ESP_LOGI(TAG, "Mode On: forcing heater start");
+        pending_on_off_command_ = CMD_START;
+        heater_on_request_ = true;
+        pump_freq_setting_ = PUMP_FREQ_INITIAL;
+        last_pump_adjust_time_ = millis();
+        in_standby_ = false;
+        in_auto_shutdown_ = false;
+    }
 }
 
 void HeaterUart::send_command(uint8_t command, uint8_t temperature) {
@@ -655,11 +706,26 @@ void HeaterUart::parse_rx_frame(const uint8_t *frame, size_t length) {
         return;  // Skip thermostat logic during cooldown
     }
 
+    // === STANDBY CHECK (AUTO mode) ===
+    // If in standby, check if temperature has dropped enough to start
+    if (in_standby_ && heater_mode_ == HeaterMode::AUTO && standalone_mode_) {
+        float threshold = target_temp - auto_shutdown_hysteresis_;
+        if (room_temp < threshold) {
+            ESP_LOGI(TAG, "Standby->Start: room %.1f°C < %.1f°C threshold", room_temp, threshold);
+            pending_on_off_command_ = CMD_START;
+            heater_on_request_ = true;
+            pump_freq_setting_ = PUMP_FREQ_INITIAL;
+            last_pump_adjust_time_ = millis();
+            in_standby_ = false;
+        }
+    }
+
     // Thermostat and safety logic
     // During early ignition (states 1-3) and shutdown (states 6-8), the heater's internal
     // controller manages pump/fan - we should NOT interfere with those sequences.
     // State 4 (Ignited): Ramp pump to max to reach operating temperature quickly.
     // State 5 (Running): Normal thermostat control.
+    // Note: In ON mode, we skip thermostat control but still respect safety limits.
     if (on_off_value_ && standalone_mode_) {
         uint32_t now = millis();
 
@@ -699,43 +765,47 @@ void HeaterUart::parse_rx_frame(const uint8_t *frame, size_t length) {
             return;
         }
 
-        // === ROOM TEMPERATURE THERMOSTAT ===
+        // === ROOM TEMPERATURE THERMOSTAT (AUTO mode only) ===
+        // In ON mode, skip thermostat control - user wants heat regardless of temperature
         // Only adjust if enough time has passed - thermal mass means changes take time
         if (now - last_pump_adjust_time_ < PUMP_ADJUST_INTERVAL_MS) {
             return;  // Wait for thermal response before next adjustment
         }
 
-        // Calculate step based on temperature gap - larger gaps = more aggressive adjustment
-        float temp_gap = std::abs(room_temp - target_temp);
-        float multiplier = (temp_gap >= 5.0f) ? 3.0f : (temp_gap >= 2.0f) ? 2.0f : 1.0f;
-        float step = PUMP_FREQ_STEP * multiplier;
-
-        // This is the main control loop for comfort
         float new_freq = pump_freq_setting_;
 
-        if (room_temp < ramp_down_temp) {
-            // Room is cold: ramp UP pump to heat faster
-            new_freq = pump_freq_setting_ + step;
-            if (new_freq <= PUMP_FREQ_MAX && new_freq != pump_freq_setting_) {
-                ESP_LOGI(TAG, "Room %.1f°C < %.1f°C: increasing pump %.1f -> %.1f Hz (gap %.1f°C, x%.0f)",
-                         room_temp, ramp_down_temp, pump_freq_setting_, new_freq, temp_gap, multiplier);
+        // Only do room temperature control in AUTO mode
+        if (heater_mode_ == HeaterMode::AUTO) {
+            // Calculate step based on temperature gap - larger gaps = more aggressive adjustment
+            float temp_gap = std::abs(room_temp - target_temp);
+            float multiplier = (temp_gap >= 5.0f) ? 3.0f : (temp_gap >= 2.0f) ? 2.0f : 1.0f;
+            float step = PUMP_FREQ_STEP * multiplier;
+
+            // This is the main control loop for comfort
+            if (room_temp < ramp_down_temp) {
+                // Room is cold: ramp UP pump to heat faster
+                new_freq = pump_freq_setting_ + step;
+                if (new_freq <= PUMP_FREQ_MAX && new_freq != pump_freq_setting_) {
+                    ESP_LOGI(TAG, "Room %.1f°C < %.1f°C: increasing pump %.1f -> %.1f Hz (gap %.1f°C, x%.0f)",
+                             room_temp, ramp_down_temp, pump_freq_setting_, new_freq, temp_gap, multiplier);
+                }
+            } else if (room_temp >= target_temp) {
+                // Room reached target: ramp DOWN pump to maintain
+                new_freq = pump_freq_setting_ - step;
+                if (new_freq >= PUMP_FREQ_MIN && new_freq != pump_freq_setting_) {
+                    ESP_LOGI(TAG, "Room %.1f°C >= %.1f°C: decreasing pump %.1f -> %.1f Hz (gap %.1f°C, x%.0f)",
+                             room_temp, target_temp, pump_freq_setting_, new_freq, temp_gap, multiplier);
+                }
             }
-        } else if (room_temp >= target_temp) {
-            // Room reached target: ramp DOWN pump to maintain
-            new_freq = pump_freq_setting_ - step;
-            if (new_freq >= PUMP_FREQ_MIN && new_freq != pump_freq_setting_) {
-                ESP_LOGI(TAG, "Room %.1f°C >= %.1f°C: decreasing pump %.1f -> %.1f Hz (gap %.1f°C, x%.0f)",
-                         room_temp, target_temp, pump_freq_setting_, new_freq, temp_gap, multiplier);
-            }
+            // else: room_temp is between ramp_down_temp and target_temp - maintain current pump
         }
-        // else: room_temp is between ramp_down_temp and target_temp - maintain current pump
 
         // === SAFETY: Heat exchanger limits override thermostat ===
         // Combustion safety takes priority over comfort
         if (hx_temp < HX_TEMP_LOW && new_freq < pump_freq_setting_) {
             // HX too cold but thermostat wants to reduce - override, force increase
             new_freq = pump_freq_setting_ + PUMP_FREQ_STEP;
-            ESP_LOGW(TAG, "HX safety override: HX %.0f°C < %.0f°C, forcing pump increase to %.1f Hz",
+            ESP_LOGW(TAG, "HX soot safety override: HX %.0f°C < %.0f°C, forcing pump increase to %.1f Hz",
                      hx_temp, HX_TEMP_LOW, new_freq);
         } else if (hx_temp >= HX_TEMP_HIGH && new_freq > pump_freq_setting_) {
             // HX too hot but thermostat wants to increase - override, force decrease
@@ -751,31 +821,31 @@ void HeaterUart::parse_rx_frame(const uint8_t *frame, size_t length) {
             last_pump_adjust_time_ = now;
         }
 
-        // === AUTO-SHUTDOWN LOGIC ===
+        // === AUTO-SHUTDOWN LOGIC (AUTO mode only) ===
         // Check if conditions are met for auto-shutdown:
+        // - Mode is AUTO (not ON - ON mode bypasses thermostat)
         // - Pump at minimum (can't reduce further)
         // - Room temperature exceeds target + overshoot threshold
-        // - Auto-shutdown feature is enabled
-        const float PUMP_EPSILON = 0.05f;  // Tolerance for pump frequency comparison
-        bool pump_at_min = (pump_freq_setting_ <= PUMP_FREQ_MIN + PUMP_EPSILON);
-        bool temp_overshoot = (room_temp > target_temp + auto_shutdown_overshoot_);
+        if (heater_mode_ == HeaterMode::AUTO) {
+            const float PUMP_EPSILON = 0.05f;  // Tolerance for pump frequency comparison
+            bool pump_at_min = (pump_freq_setting_ <= PUMP_FREQ_MIN + PUMP_EPSILON);
+            bool temp_overshoot = (room_temp > target_temp + auto_shutdown_overshoot_);
 
-        if (auto_shutdown_enabled_ && pump_at_min && temp_overshoot && !in_auto_shutdown_) {
-            ESP_LOGI(TAG, "Auto-shutdown: pump at min (%.1f Hz), room %.1f°C > target %.1f°C + %.1f°C overshoot",
-                     pump_freq_setting_, room_temp, target_temp, auto_shutdown_overshoot_);
-            pending_on_off_command_ = CMD_STOP;
-            heater_on_request_ = false;
-            in_cooldown_ = true;
-            in_auto_shutdown_ = true;
+            if (pump_at_min && temp_overshoot && !in_auto_shutdown_) {
+                ESP_LOGI(TAG, "Auto-shutdown: pump at min (%.1f Hz), room %.1f°C > target %.1f°C + %.1f°C overshoot",
+                         pump_freq_setting_, room_temp, target_temp, auto_shutdown_overshoot_);
+                pending_on_off_command_ = CMD_STOP;
+                heater_on_request_ = false;
+                in_cooldown_ = true;
+                in_auto_shutdown_ = true;
+            }
         }
     }
 
-    // === AUTO-RESTART LOGIC ===
+    // === AUTO-RESTART LOGIC (AUTO mode only) ===
     // Check if heater should auto-restart from auto-shutdown state
     // This runs when heater is off and was auto-shutdown (not manual off)
-    if (!on_off_value_ && in_auto_shutdown_ && auto_shutdown_enabled_ && standalone_mode_) {
-        float room_temp = current_temperature_value_;
-        float target_temp = desired_temp_setting_;
+    if (!on_off_value_ && in_auto_shutdown_ && heater_mode_ == HeaterMode::AUTO && standalone_mode_) {
         float restart_threshold = target_temp - auto_shutdown_hysteresis_;
 
         if (room_temp < restart_threshold) {

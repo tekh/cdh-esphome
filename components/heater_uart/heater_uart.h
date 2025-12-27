@@ -5,14 +5,21 @@
 #include "esphome/components/sensor/sensor.h"
 #include "esphome/components/text_sensor/text_sensor.h"
 #include "esphome/components/binary_sensor/binary_sensor.h"
-#include "esphome/components/switch/switch.h"
 #include "esphome/components/number/number.h"
+#include "esphome/components/select/select.h"
 
 #include <map>
 #include <string>
 
 namespace esphome {
 namespace heater_uart {
+
+// Heater operating mode
+enum class HeaterMode : uint8_t {
+  OFF = 0,   // Heater stays off
+  AUTO = 1,  // Thermostat controls - auto-shutdown/restart enabled
+  ON = 2     // Force heater on, bypass thermostat (safety limits still apply)
+};
 
 // Command bytes for Tx Byte[2]
 static const uint8_t CMD_NO_CHANGE = 0x00;
@@ -80,11 +87,10 @@ class HeaterUart : public PollingComponent, public uart::UARTDevice {
   void set_sensor(const std::string &key, sensor::Sensor *sensor);
   void set_text_sensor(const std::string &key, text_sensor::TextSensor *text_sensor);
   void set_binary_sensor(const std::string &key, binary_sensor::BinarySensor *binary_sensor);
-  void set_power_switch(switch_::Switch *sw) { this->power_switch_ = sw; }
   void set_temperature_number(number::Number *num) { this->temperature_number_ = num; }
   void set_temperature_sensor(sensor::Sensor *sensor) { this->external_temp_sensor_ = sensor; }
   void set_pump_number(number::Number *num) { this->pump_number_ = num; }
-  void set_auto_shutdown_switch(switch_::Switch *sw) { this->auto_shutdown_switch_ = sw; }
+  void set_mode_select(select::Select *sel) { this->mode_select_ = sel; }
 
   // Configuration setters
   void set_standalone_mode(bool standalone) { this->standalone_mode_ = standalone; }
@@ -93,7 +99,9 @@ class HeaterUart : public PollingComponent, public uart::UARTDevice {
   void set_altitude(uint16_t altitude) { this->altitude_ = altitude; }
   void set_auto_shutdown_overshoot(float overshoot) { this->auto_shutdown_overshoot_ = overshoot; }
   void set_auto_shutdown_hysteresis(float hysteresis) { this->auto_shutdown_hysteresis_ = hysteresis; }
-  void set_auto_shutdown_enabled(bool enabled) { this->auto_shutdown_enabled_ = enabled; }
+
+  // Heater mode control
+  void set_heater_mode(HeaterMode mode);
 
   void setup() override;
   void loop() override;
@@ -111,15 +119,14 @@ class HeaterUart : public PollingComponent, public uart::UARTDevice {
   float get_pump_frequency_setting() const { return pump_freq_setting_; }
   bool is_standalone_mode() const { return standalone_mode_; }
   bool is_in_auto_shutdown() const { return in_auto_shutdown_; }
+  bool is_in_standby() const { return in_standby_; }
+  HeaterMode get_heater_mode() const { return heater_mode_; }
 
  protected:
   // Sensor storage
   std::map<std::string, sensor::Sensor *> sensors_;
   std::map<std::string, text_sensor::TextSensor *> text_sensors_;
   std::map<std::string, binary_sensor::BinarySensor *> binary_sensors_;
-
-  // Power switch reference (for state sync)
-  switch_::Switch *power_switch_{nullptr};
 
   // Temperature number reference (for state sync)
   number::Number *temperature_number_{nullptr};
@@ -130,8 +137,11 @@ class HeaterUart : public PollingComponent, public uart::UARTDevice {
   // Pump frequency number reference (for state sync)
   number::Number *pump_number_{nullptr};
 
-  // Auto-shutdown switch reference (for state sync)
-  switch_::Switch *auto_shutdown_switch_{nullptr};
+  // Mode select reference (for state sync)
+  select::Select *mode_select_{nullptr};
+
+  // Heater operating mode
+  HeaterMode heater_mode_ = HeaterMode::OFF;
 
   // Pump frequency setting (Hz, for fixed Hz mode)
   float pump_freq_setting_ = 1.6f;  // Default to low pump rate
@@ -171,11 +181,11 @@ class HeaterUart : public PollingComponent, public uart::UARTDevice {
   bool in_cooldown_ = false;             // Cooldown mode active (fan running to cool HX)
   uint32_t last_pump_adjust_time_ = 0;   // Last time pump frequency was adjusted
 
-  // Auto-shutdown configuration
+  // Auto-shutdown configuration (used in AUTO mode)
   float auto_shutdown_overshoot_ = 0.5f;   // Temperature overshoot before auto-shutdown (°C)
   float auto_shutdown_hysteresis_ = 1.5f;  // Temperature drop before auto-restart (°C)
-  bool auto_shutdown_enabled_ = true;      // Auto-shutdown feature enabled
   bool in_auto_shutdown_ = false;          // Currently in auto-shutdown state
+  bool in_standby_ = false;                // Waiting for temp to drop before starting (AUTO mode)
 
   // Parsed data
   float current_temperature_value_ = 0;

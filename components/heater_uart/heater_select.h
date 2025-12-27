@@ -1,14 +1,13 @@
 #pragma once
 
 #include "esphome/core/component.h"
-#include "esphome/components/switch/switch.h"
+#include "esphome/components/select/select.h"
 #include "heater_uart.h"
-#include "heater_auto_shutdown_switch.h"
 
 namespace esphome {
 namespace heater_uart {
 
-class HeaterSwitch : public switch_::Switch, public Component {
+class HeaterModeSelect : public select::Select, public Component {
  public:
   void set_parent(HeaterUart *parent) { this->parent_ = parent; }
 
@@ -16,7 +15,7 @@ class HeaterSwitch : public switch_::Switch, public Component {
   void dump_config() override;
 
  protected:
-  void write_state(bool state) override;
+  void control(const std::string &value) override;
   HeaterUart *parent_{nullptr};
 };
 
