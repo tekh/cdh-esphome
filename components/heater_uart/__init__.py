@@ -13,6 +13,7 @@ CONF_STANDALONE_MODE = "standalone_mode"
 CONF_OPERATING_VOLTAGE = "operating_voltage"
 CONF_TEMPERATURE_SENSOR = "temperature_sensor"
 CONF_TEMPERATURE_BACKOFF = "temperature_backoff"
+CONF_ALTITUDE = "altitude"
 
 # Operating voltage constants (must match C++ values)
 VOLTAGE_12V = 0x78  # 120 = 12.0V
@@ -28,6 +29,7 @@ CONFIG_SCHEMA = cv.Schema(
         ),
         cv.Optional(CONF_TEMPERATURE_SENSOR): cv.use_id(sensor.Sensor),
         cv.Optional(CONF_TEMPERATURE_BACKOFF, default=0.5): cv.float_range(min=0.0, max=5.0),
+        cv.Optional(CONF_ALTITUDE, default=750): cv.int_range(min=0, max=5000),
     }
 ).extend(uart.UART_DEVICE_SCHEMA)
 
@@ -43,6 +45,7 @@ async def to_code(config):
     cg.add(var.set_standalone_mode(config[CONF_STANDALONE_MODE]))
     cg.add(var.set_operating_voltage(config[CONF_OPERATING_VOLTAGE]))
     cg.add(var.set_temperature_backoff(config[CONF_TEMPERATURE_BACKOFF]))
+    cg.add(var.set_altitude(config[CONF_ALTITUDE]))
 
     # Configure external temperature sensor (for standalone mode)
     if CONF_TEMPERATURE_SENSOR in config:

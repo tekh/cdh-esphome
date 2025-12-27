@@ -1,2 +1,1 @@
-if Run State = Stopping - Post Run Glow Re-heat OR Cooldown
-    ->heater power switch has to be off
+add a bme280 for automatic altitude

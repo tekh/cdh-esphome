@@ -66,6 +66,7 @@ void HeaterUart::setup() {
     if (standalone_mode_) {
         ESP_LOGI(TAG, "Running in STANDALONE mode - ESP32 is the heater controller");
         ESP_LOGI(TAG, "Operating voltage: %s", operating_voltage_ == VOLTAGE_12V ? "12V" : "24V");
+        ESP_LOGI(TAG, "Altitude: %d m", altitude_);
         ESP_LOGI(TAG, "Initial desired temperature: %d°C", desired_temp_setting_);
     } else {
         ESP_LOGI(TAG, "Running in INJECTION mode - working alongside LCD controller");
@@ -506,9 +507,9 @@ void HeaterUart::build_tx_frame(uint8_t *frame, uint8_t command) {
     frame[18] = 0x00;
     frame[19] = 0x00;
 
-    // Bytes 20-21: Altitude (big endian)
-    frame[20] = (DEFAULT_ALTITUDE >> 8) & 0xFF;
-    frame[21] = DEFAULT_ALTITUDE & 0xFF;
+    // Bytes 20-21: Altitude (big endian, configurable via YAML)
+    frame[20] = (altitude_ >> 8) & 0xFF;
+    frame[21] = altitude_ & 0xFF;
 
     // Calculate and append CRC-16/MODBUS
     uint16_t crc = calc_crc16(frame, 22);
@@ -656,8 +657,14 @@ void HeaterUart::parse_rx_frame(const uint8_t *frame, size_t length) {
             // But respect the adjustment interval - thermal response takes time
             if (pump_freq_setting_ < PUMP_FREQ_MAX) {
                 if (now - last_pump_adjust_time_ >= PUMP_ADJUST_INTERVAL_MS) {
-                    float new_freq = std::min(pump_freq_setting_ + PUMP_FREQ_STEP, PUMP_FREQ_MAX);
-                    ESP_LOGI(TAG, "Ignited (state 4): ramping pump %.1f -> %.1f Hz", pump_freq_setting_, new_freq);
+                    // Scale step based on how cold the room is
+                    float temp_gap = target_temp - room_temp;
+                    float multiplier = (temp_gap >= 5.0f) ? 3.0f : (temp_gap >= 2.0f) ? 2.0f : 1.0f;
+                    float step = PUMP_FREQ_STEP * multiplier;
+
+                    float new_freq = std::min(pump_freq_setting_ + step, PUMP_FREQ_MAX);
+                    ESP_LOGI(TAG, "Ignited (state 4): gap %.1f°C, ramping pump %.1f -> %.1f Hz (x%.0f)",
+                             temp_gap, pump_freq_setting_, new_freq, multiplier);
                     pump_freq_setting_ = new_freq;
                     last_pump_adjust_time_ = now;
                 }
@@ -687,22 +694,27 @@ void HeaterUart::parse_rx_frame(const uint8_t *frame, size_t length) {
             return;  // Wait for thermal response before next adjustment
         }
 
+        // Calculate step based on temperature gap - larger gaps = more aggressive adjustment
+        float temp_gap = std::abs(room_temp - target_temp);
+        float multiplier = (temp_gap >= 5.0f) ? 3.0f : (temp_gap >= 2.0f) ? 2.0f : 1.0f;
+        float step = PUMP_FREQ_STEP * multiplier;
+
         // This is the main control loop for comfort
         float new_freq = pump_freq_setting_;
 
         if (room_temp < ramp_down_temp) {
             // Room is cold: ramp UP pump to heat faster
-            new_freq = pump_freq_setting_ + PUMP_FREQ_STEP;
+            new_freq = pump_freq_setting_ + step;
             if (new_freq <= PUMP_FREQ_MAX && new_freq != pump_freq_setting_) {
-                ESP_LOGI(TAG, "Room %.1f°C < %.1f°C (target-%.1f): increasing pump %.1f -> %.1f Hz",
-                         room_temp, ramp_down_temp, temp_backoff_offset_, pump_freq_setting_, new_freq);
+                ESP_LOGI(TAG, "Room %.1f°C < %.1f°C: increasing pump %.1f -> %.1f Hz (gap %.1f°C, x%.0f)",
+                         room_temp, ramp_down_temp, pump_freq_setting_, new_freq, temp_gap, multiplier);
             }
         } else if (room_temp >= target_temp) {
             // Room reached target: ramp DOWN pump to maintain
-            new_freq = pump_freq_setting_ - PUMP_FREQ_STEP;
+            new_freq = pump_freq_setting_ - step;
             if (new_freq >= PUMP_FREQ_MIN && new_freq != pump_freq_setting_) {
-                ESP_LOGI(TAG, "Room %.1f°C >= %.1f°C target: decreasing pump %.1f -> %.1f Hz",
-                         room_temp, target_temp, pump_freq_setting_, new_freq);
+                ESP_LOGI(TAG, "Room %.1f°C >= %.1f°C: decreasing pump %.1f -> %.1f Hz (gap %.1f°C, x%.0f)",
+                         room_temp, target_temp, pump_freq_setting_, new_freq, temp_gap, multiplier);
             }
         }
         // else: room_temp is between ramp_down_temp and target_temp - maintain current pump

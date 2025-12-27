@@ -54,7 +54,7 @@ static const uint32_t PUMP_ADJUST_INTERVAL_MS = 5000;  // 5 seconds between adju
 // Heat exchanger temperature thresholds (°C)
 static const float HX_TEMP_LOW = 190.0f;      // Below this: increase pump (more fuel)
 static const float HX_TEMP_TARGET = 250.0f;   // Target temperature
-static const float HX_TEMP_HIGH = 250.0f;     // At/above this: decrease pump (less fuel)
+static const float HX_TEMP_HIGH = 255.0f;     // At/above this: decrease pump (less fuel)
 static const float HX_TEMP_CRITICAL = 265.0f; // Above this: emergency shutdown
 
 // Cooldown parameters
@@ -89,6 +89,7 @@ class HeaterUart : public PollingComponent, public uart::UARTDevice {
   void set_standalone_mode(bool standalone) { this->standalone_mode_ = standalone; }
   void set_operating_voltage(uint8_t voltage) { this->operating_voltage_ = voltage; }
   void set_temperature_backoff(float offset) { this->temp_backoff_offset_ = offset; }
+  void set_altitude(uint16_t altitude) { this->altitude_ = altitude; }
 
   void setup() override;
   void loop() override;
@@ -149,6 +150,7 @@ class HeaterUart : public PollingComponent, public uart::UARTDevice {
   // Standalone mode settings
   bool standalone_mode_ = false;
   uint8_t operating_voltage_ = VOLTAGE_12V;
+  uint16_t altitude_ = 750;            // Altitude in metres (affects combustion)
   uint8_t desired_temp_setting_ = 22;  // Our desired temperature (for standalone)
   float temp_backoff_offset_ = 0.5f;   // Start ramping down this many °C before target
   bool heater_on_request_ = false;     // Whether we want heater on
