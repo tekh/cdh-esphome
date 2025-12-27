@@ -686,7 +686,6 @@ void HeaterUart::parse_rx_frame(const uint8_t *frame, size_t length) {
     float hx_temp = heat_exchanger_temp_value_;
     float room_temp = current_temperature_value_;  // From external sensor (set in build_tx_frame)
     float target_temp = static_cast<float>(desired_temp_setting_);
-    float ramp_down_temp = target_temp - temp_backoff_offset_;
 
     ESP_LOGD(TAG, "RX: State=%d (%s), OnOff=%d, Fan=%d RPM, HX=%.0f°C, Room=%.1f°C, Target=%.1f°C, Pump=%.1fHz%s",
              run_state_value_, run_state_description_.c_str(), on_off_value_,
@@ -776,28 +775,45 @@ void HeaterUart::parse_rx_frame(const uint8_t *frame, size_t length) {
 
         // Only do room temperature control in AUTO mode
         if (heater_mode_ == HeaterMode::AUTO) {
-            // Calculate step based on temperature gap - larger gaps = more aggressive adjustment
-            float temp_gap = std::abs(room_temp - target_temp);
-            float multiplier = (temp_gap >= 5.0f) ? 3.0f : (temp_gap >= 2.0f) ? 2.0f : 1.0f;
-            float step = PUMP_FREQ_STEP * multiplier;
+            // Three-phase thermostat control for smooth temperature approach:
+            // 1. Heating phase: room < (target - approach_threshold) → increase pump
+            // 2. Approach phase: within approach_threshold of target → decrease pump slowly
+            // 3. At/above target: decrease pump rapidly to prevent overshoot
 
-            // This is the main control loop for comfort
-            if (room_temp < ramp_down_temp) {
-                // Room is cold: ramp UP pump to heat faster
+            float approach_temp = target_temp - approach_threshold_;
+            float temp_gap = std::abs(room_temp - target_temp);
+
+            if (room_temp < approach_temp) {
+                // HEATING PHASE: Room is cold, increase pump
+                // Larger gaps = more aggressive increase
+                float multiplier = (temp_gap >= 5.0f) ? 3.0f : (temp_gap >= 2.0f) ? 2.0f : 1.0f;
+                float step = PUMP_FREQ_STEP * multiplier;
                 new_freq = pump_freq_setting_ + step;
                 if (new_freq <= PUMP_FREQ_MAX && new_freq != pump_freq_setting_) {
-                    ESP_LOGI(TAG, "Room %.1f°C < %.1f°C: increasing pump %.1f -> %.1f Hz (gap %.1f°C, x%.0f)",
-                             room_temp, ramp_down_temp, pump_freq_setting_, new_freq, temp_gap, multiplier);
+                    ESP_LOGI(TAG, "Heating: room %.1f°C < %.1f°C, pump %.1f -> %.1f Hz (x%.0f)",
+                             room_temp, approach_temp, pump_freq_setting_, new_freq, multiplier);
                 }
-            } else if (room_temp >= target_temp) {
-                // Room reached target: ramp DOWN pump to maintain
+            } else if (room_temp < target_temp) {
+                // APPROACH PHASE: Within approach threshold, start reducing pump slowly
+                // This prevents overshoot by slowing down before reaching target
+                float step = PUMP_FREQ_STEP;  // Always 1x step for gentle approach
                 new_freq = pump_freq_setting_ - step;
                 if (new_freq >= PUMP_FREQ_MIN && new_freq != pump_freq_setting_) {
-                    ESP_LOGI(TAG, "Room %.1f°C >= %.1f°C: decreasing pump %.1f -> %.1f Hz (gap %.1f°C, x%.0f)",
-                             room_temp, target_temp, pump_freq_setting_, new_freq, temp_gap, multiplier);
+                    ESP_LOGI(TAG, "Approach: room %.1f°C approaching %.1f°C, slowing pump %.1f -> %.1f Hz",
+                             room_temp, target_temp, pump_freq_setting_, new_freq);
+                }
+            } else {
+                // AT/ABOVE TARGET: Reduce pump rapidly to prevent overshoot
+                // Larger overshoot = more aggressive reduction
+                float overshoot = room_temp - target_temp;
+                float multiplier = (overshoot >= 1.0f) ? 3.0f : (overshoot >= 0.5f) ? 2.0f : 1.0f;
+                float step = PUMP_FREQ_STEP * multiplier;
+                new_freq = pump_freq_setting_ - step;
+                if (new_freq >= PUMP_FREQ_MIN && new_freq != pump_freq_setting_) {
+                    ESP_LOGI(TAG, "At target: room %.1f°C >= %.1f°C, reducing pump %.1f -> %.1f Hz (x%.0f)",
+                             room_temp, target_temp, pump_freq_setting_, new_freq, multiplier);
                 }
             }
-            // else: room_temp is between ramp_down_temp and target_temp - maintain current pump
         }
 
         // === SAFETY: Heat exchanger limits override thermostat ===

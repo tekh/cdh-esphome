@@ -99,6 +99,7 @@ class HeaterUart : public PollingComponent, public uart::UARTDevice {
   void set_altitude(uint16_t altitude) { this->altitude_ = altitude; }
   void set_auto_shutdown_overshoot(float overshoot) { this->auto_shutdown_overshoot_ = overshoot; }
   void set_auto_shutdown_hysteresis(float hysteresis) { this->auto_shutdown_hysteresis_ = hysteresis; }
+  void set_approach_threshold(float threshold) { this->approach_threshold_ = threshold; }
 
   // Heater mode control
   void set_heater_mode(HeaterMode mode);
@@ -184,6 +185,7 @@ class HeaterUart : public PollingComponent, public uart::UARTDevice {
   // Auto-shutdown configuration (used in AUTO mode)
   float auto_shutdown_overshoot_ = 0.5f;   // Temperature overshoot before auto-shutdown (°C)
   float auto_shutdown_hysteresis_ = 1.5f;  // Temperature drop before auto-restart (°C)
+  float approach_threshold_ = 1.0f;        // Start reducing pump when within this of target (°C)
   bool in_auto_shutdown_ = false;          // Currently in auto-shutdown state
   bool in_standby_ = false;                // Waiting for temp to drop before starting (AUTO mode)
 
