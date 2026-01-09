@@ -187,6 +187,8 @@ void HeaterUart::update() {
             binary_sensor->publish_state(in_auto_shutdown_);
         else if (key == "standby_active")
             binary_sensor->publish_state(in_standby_);
+        else if (key == "priming_active")
+            binary_sensor->publish_state(is_priming_);
     }
 
     // Sync temperature number with actual desired temperature
@@ -480,6 +482,12 @@ void HeaterUart::standalone_loop() {
         return;
     }
 
+    // Check priming timeout (60 seconds)
+    if (is_priming_ && (now - priming_start_time_ >= 60000)) {
+        ESP_LOGI(TAG, "Fuel priming timeout reached (60 seconds) - stopping priming");
+        stop_priming();
+    }
+
     // Time to send next frame?
     if (now - last_tx_time_ >= STANDALONE_TX_INTERVAL_MS) {
         send_standalone_frame();
@@ -516,7 +524,13 @@ void HeaterUart::build_tx_frame(uint8_t *frame, uint8_t command) {
 
     // Bytes 5-6: Pump frequency (0.1 Hz units)
     // Set both min and max to same value for fixed Hz mode (direct pump control)
-    uint8_t pump_freq_raw = static_cast<uint8_t>(pump_freq_setting_ * 10.0f);
+    // During priming, override with 5.0 Hz to run pump without starting heater
+    uint8_t pump_freq_raw;
+    if (is_priming_) {
+        pump_freq_raw = 0x32;  // 5.0 Hz for priming
+    } else {
+        pump_freq_raw = static_cast<uint8_t>(pump_freq_setting_ * 10.0f);
+    }
     frame[5] = pump_freq_raw;  // Min pump frequency
     frame[6] = pump_freq_raw;  // Max pump frequency (same = fixed Hz mode)
 
@@ -562,8 +576,14 @@ void HeaterUart::build_tx_frame(uint8_t *frame, uint8_t command) {
     frame[15] = 0x00;
 
     // Bytes 16-17: Prime pump frequency (zeros = no priming)
-    frame[16] = 0x00;
-    frame[17] = 0x00;
+    if (is_priming_) {
+        // Priming active: set prime pump frequency to 5.0 Hz
+        frame[16] = 0x32;  // 50 = 5.0 Hz in 0.1 Hz units
+        frame[17] = 0x5A;  // Manual pump priming mode (protocol spec: 0x5A = priming, 0x00 = normal)
+    } else {
+        frame[16] = 0x00;
+        frame[17] = 0x00;
+    }
 
     // Bytes 18-19: Unknown/reserved
     frame[18] = 0x00;
@@ -593,10 +613,19 @@ void HeaterUart::send_standalone_frame() {
     // Build the frame
     build_tx_frame(tx_frame, command);
 
-    // Log frame (debug level to reduce spam)
-    ESP_LOGD(TAG, "TX: %02X %02X %02X %02X %02X %02X %02X %02X ...",
-             tx_frame[0], tx_frame[1], tx_frame[2], tx_frame[3],
-             tx_frame[4], tx_frame[5], tx_frame[6], tx_frame[7]);
+    // Log frame (debug level to reduce spam, but always log during priming)
+    if (is_priming_) {
+        ESP_LOGI(TAG, "TX (PRIMING): %02X %02X %02X %02X %02X %02X %02X %02X %02X %02X %02X %02X %02X %02X %02X %02X %02X %02X",
+                 tx_frame[0], tx_frame[1], tx_frame[2], tx_frame[3],
+                 tx_frame[4], tx_frame[5], tx_frame[6], tx_frame[7],
+                 tx_frame[8], tx_frame[9], tx_frame[10], tx_frame[11],
+                 tx_frame[12], tx_frame[13], tx_frame[14], tx_frame[15],
+                 tx_frame[16], tx_frame[17]);
+    } else {
+        ESP_LOGD(TAG, "TX: %02X %02X %02X %02X %02X %02X %02X %02X ...",
+                 tx_frame[0], tx_frame[1], tx_frame[2], tx_frame[3],
+                 tx_frame[4], tx_frame[5], tx_frame[6], tx_frame[7]);
+    }
 
     // Send frame
     write_array(tx_frame, 24);
@@ -873,6 +902,50 @@ void HeaterUart::parse_rx_frame(const uint8_t *frame, size_t length) {
             last_pump_adjust_time_ = millis();
             in_auto_shutdown_ = false;
         }
+    }
+}
+
+void HeaterUart::start_priming() {
+    // Only allow priming when heater is OFF
+    if (on_off_value_ || heater_on_request_) {
+        ESP_LOGW(TAG, "Cannot start priming - heater is currently running");
+        return;
+    }
+
+    if (!standalone_mode_) {
+        ESP_LOGW(TAG, "Fuel priming is only available in standalone mode");
+        return;
+    }
+
+    if (is_priming_) {
+        ESP_LOGI(TAG, "Priming already active - stopping priming");
+        stop_priming();
+        return;
+    }
+
+    ESP_LOGI(TAG, "Starting fuel priming - pump will run at 5.0 Hz for 60 seconds");
+    is_priming_ = true;
+    priming_start_time_ = millis();
+
+    // Publish state immediately
+    auto it = binary_sensors_.find("priming_active");
+    if (it != binary_sensors_.end() && it->second != nullptr) {
+        it->second->publish_state(true);
+    }
+}
+
+void HeaterUart::stop_priming() {
+    if (!is_priming_) {
+        return;
+    }
+
+    ESP_LOGI(TAG, "Stopping fuel priming");
+    is_priming_ = false;
+
+    // Publish state immediately
+    auto it = binary_sensors_.find("priming_active");
+    if (it != binary_sensors_.end() && it->second != nullptr) {
+        it->second->publish_state(false);
     }
 }
 

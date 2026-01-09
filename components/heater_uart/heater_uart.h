@@ -14,6 +14,9 @@
 namespace esphome {
 namespace heater_uart {
 
+// Forward declaration
+class HeaterClimate;
+
 // Heater operating mode
 enum class HeaterMode : uint8_t {
   OFF = 0,   // Heater stays off
@@ -38,8 +41,8 @@ static const uint8_t RUN_STATE_POST_GLOW = 7;
 static const uint8_t RUN_STATE_COOLDOWN = 8;
 
 // Temperature limits (from protocol)
-static const uint8_t TEMP_MIN = 8;
-static const uint8_t TEMP_MAX = 35;
+static const uint8_t TEMP_MIN = 0;
+static const uint8_t TEMP_MAX = 30;
 
 // Operating voltage options
 static const uint8_t VOLTAGE_12V = 0x78;  // 120 = 12.0V
@@ -91,6 +94,7 @@ class HeaterUart : public PollingComponent, public uart::UARTDevice {
   void set_temperature_sensor(sensor::Sensor *sensor) { this->external_temp_sensor_ = sensor; }
   void set_pump_number(number::Number *num) { this->pump_number_ = num; }
   void set_mode_select(select::Select *sel) { this->mode_select_ = sel; }
+  void set_climate(HeaterClimate *climate) { this->climate_ = climate; }
 
   // Configuration setters
   void set_standalone_mode(bool standalone) { this->standalone_mode_ = standalone; }
@@ -117,11 +121,17 @@ class HeaterUart : public PollingComponent, public uart::UARTDevice {
   // State accessors
   bool get_on_off_state() const { return on_off_value_; }
   int get_desired_temperature() const { return desired_temperature_value_; }
+  float get_current_temperature() const { return current_temperature_value_; }
   float get_pump_frequency_setting() const { return pump_freq_setting_; }
   bool is_standalone_mode() const { return standalone_mode_; }
   bool is_in_auto_shutdown() const { return in_auto_shutdown_; }
   bool is_in_standby() const { return in_standby_; }
   HeaterMode get_heater_mode() const { return heater_mode_; }
+  bool is_priming() const { return is_priming_; }
+
+  // Fuel priming control
+  void start_priming();
+  void stop_priming();
 
  protected:
   // Sensor storage
@@ -140,6 +150,9 @@ class HeaterUart : public PollingComponent, public uart::UARTDevice {
 
   // Mode select reference (for state sync)
   select::Select *mode_select_{nullptr};
+
+  // Climate component reference
+  HeaterClimate *climate_{nullptr};
 
   // Heater operating mode
   HeaterMode heater_mode_ = HeaterMode::OFF;
@@ -188,6 +201,10 @@ class HeaterUart : public PollingComponent, public uart::UARTDevice {
   float approach_threshold_ = 1.0f;        // Start reducing pump when within this of target (°C)
   bool in_auto_shutdown_ = false;          // Currently in auto-shutdown state
   bool in_standby_ = false;                // Waiting for temp to drop before starting (AUTO mode)
+
+  // Fuel priming state
+  bool is_priming_ = false;                // Fuel priming active
+  uint32_t priming_start_time_ = 0;        // Time when priming started (millis)
 
   // Parsed data
   float current_temperature_value_ = 0;
