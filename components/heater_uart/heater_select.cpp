@@ -17,7 +17,7 @@ void HeaterModeSelect::setup() {
 
 void HeaterModeSelect::dump_config() {
     ESP_LOGCONFIG(TAG, "Heater Mode Select:");
-    ESP_LOGCONFIG(TAG, "  Options: Off, Auto, On");
+    ESP_LOGCONFIG(TAG, "  Options: Off, Auto, Heat");
 }
 
 void HeaterModeSelect::control(const std::string &value) {
@@ -33,9 +33,9 @@ void HeaterModeSelect::control(const std::string &value) {
     } else if (value == "Auto") {
         mode = HeaterMode::AUTO;
         ESP_LOGI(TAG, "Setting heater mode to Auto");
-    } else if (value == "On") {
+    } else if (value == "Heat") {
         mode = HeaterMode::ON;
-        ESP_LOGI(TAG, "Setting heater mode to On");
+        ESP_LOGI(TAG, "Setting heater mode to Heat");
     } else {
         ESP_LOGW(TAG, "Unknown mode: %s", value.c_str());
         return;

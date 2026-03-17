@@ -14,9 +14,6 @@
 namespace esphome {
 namespace heater_uart {
 
-// Forward declaration
-class HeaterClimate;
-
 // Heater operating mode
 enum class HeaterMode : uint8_t {
   OFF = 0,   // Heater stays off
@@ -94,7 +91,6 @@ class HeaterUart : public PollingComponent, public uart::UARTDevice {
   void set_temperature_sensor(sensor::Sensor *sensor) { this->external_temp_sensor_ = sensor; }
   void set_pump_number(number::Number *num) { this->pump_number_ = num; }
   void set_mode_select(select::Select *sel) { this->mode_select_ = sel; }
-  void set_climate(HeaterClimate *climate) { this->climate_ = climate; }
 
   // Configuration setters
   void set_standalone_mode(bool standalone) { this->standalone_mode_ = standalone; }
@@ -150,9 +146,6 @@ class HeaterUart : public PollingComponent, public uart::UARTDevice {
 
   // Mode select reference (for state sync)
   select::Select *mode_select_{nullptr};
-
-  // Climate component reference
-  HeaterClimate *climate_{nullptr};
 
   // Heater operating mode
   HeaterMode heater_mode_ = HeaterMode::OFF;

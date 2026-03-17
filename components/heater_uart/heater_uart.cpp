@@ -802,12 +802,13 @@ void HeaterUart::parse_rx_frame(const uint8_t *frame, size_t length) {
 
         float new_freq = pump_freq_setting_;
 
-        // Only do room temperature control in AUTO mode
+        // Room temperature control - different behavior for AUTO vs HEAT mode
         if (heater_mode_ == HeaterMode::AUTO) {
-            // Three-phase thermostat control for smooth temperature approach:
+            // AUTO mode: Three-phase thermostat control with auto-shutdown
             // 1. Heating phase: room < (target - approach_threshold) → increase pump
             // 2. Approach phase: within approach_threshold of target → decrease pump slowly
             // 3. At/above target: decrease pump rapidly to prevent overshoot
+            // 4. Auto-shutdown when at minimum pump and temp exceeded
 
             float approach_temp = target_temp - approach_threshold_;
             float temp_gap = std::abs(room_temp - target_temp);
@@ -841,6 +842,39 @@ void HeaterUart::parse_rx_frame(const uint8_t *frame, size_t length) {
                 if (new_freq >= PUMP_FREQ_MIN && new_freq != pump_freq_setting_) {
                     ESP_LOGI(TAG, "At target: room %.1f°C >= %.1f°C, reducing pump %.1f -> %.1f Hz (x%.0f)",
                              room_temp, target_temp, pump_freq_setting_, new_freq, multiplier);
+                }
+            }
+        } else if (heater_mode_ == HeaterMode::ON) {
+            // HEAT mode: Continuous heat with approach control, no auto-shutdown
+            // Ramp pump to minimum when approaching target, but keep heater running
+
+            float approach_temp = target_temp - approach_threshold_;
+
+            if (room_temp < approach_temp) {
+                // HEATING PHASE: Room is cold, increase pump as needed
+                float temp_gap = target_temp - room_temp;
+                float multiplier = (temp_gap >= 5.0f) ? 3.0f : (temp_gap >= 2.0f) ? 2.0f : 1.0f;
+                float step = PUMP_FREQ_STEP * multiplier;
+                new_freq = pump_freq_setting_ + step;
+                if (new_freq <= PUMP_FREQ_MAX && new_freq != pump_freq_setting_) {
+                    ESP_LOGI(TAG, "HEAT mode: room %.1f°C < %.1f°C, pump %.1f -> %.1f Hz (x%.0f)",
+                             room_temp, approach_temp, pump_freq_setting_, new_freq, multiplier);
+                }
+            } else {
+                // APPROACH/AT TARGET: Ramp down to minimum pump, keep running
+                // This maintains heat without overshooting too much
+                if (pump_freq_setting_ > PUMP_FREQ_MIN) {
+                    float overshoot = room_temp - target_temp;
+                    float multiplier = (overshoot >= 1.0f) ? 3.0f : (overshoot >= 0.5f) ? 2.0f : 1.0f;
+                    float step = PUMP_FREQ_STEP * multiplier;
+                    new_freq = pump_freq_setting_ - step;
+                    if (new_freq < PUMP_FREQ_MIN) {
+                        new_freq = PUMP_FREQ_MIN;
+                    }
+                    if (new_freq != pump_freq_setting_) {
+                        ESP_LOGI(TAG, "HEAT mode approach: room %.1f°C >= %.1f°C, pump %.1f -> %.1f Hz (min %.1f)",
+                                 room_temp, approach_temp, pump_freq_setting_, new_freq, PUMP_FREQ_MIN);
+                    }
                 }
             }
         }

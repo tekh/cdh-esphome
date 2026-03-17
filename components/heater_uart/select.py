@@ -26,7 +26,7 @@ CONFIG_SCHEMA = (
 
 
 async def to_code(config):
-    var = await select.new_select(config, options=["Off", "Auto", "On"])
+    var = await select.new_select(config, options=["Off", "Auto", "Heat"])
     await cg.register_component(var, config)
 
     parent = await cg.get_variable(config[CONF_HEATER_UART_ID])

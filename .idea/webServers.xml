@@ -1,0 +1,14 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<project version="4">
+  <component name="WebServers">
+    <option name="servers">
+      <webServer id="2f9afa23-820a-4c59-9a86-857e13b6a5bc" name="hoas">
+        <fileTransfer rootFolder="/homeassistant/esphome/components" accessType="SFTP" host="10.12.5.12" port="22" sshConfigId="f432b9d9-ff0c-4573-8b11-545e9cb432f9" sshConfig="root@10.12.5.12:22 key" keyPair="true">
+          <advancedOptions>
+            <advancedOptions dataProtectionLevel="Private" keepAliveTimeout="0" passiveMode="true" shareSSLContext="true" />
+          </advancedOptions>
+        </fileTransfer>
+      </webServer>
+    </option>
+  </component>
+</project>
