@@ -1,0 +1,72 @@
+### Remember to rename the entities. currently I need to add lab_heater_
+
+Full Dashboard with Mode Actions Integrated:
+type: vertical-stack
+cards:
+  # Header
+  - type: glance
+    title: Lab Heater
+    columns: 3
+    entities:
+      - entity: sensor.room_temperature
+        name: Room
+      - entity: sensor.current_temperature
+        name: Heat Ex
+      - entity: sensor.run_state
+        name: Status
+  # Mode Selection Buttons
+  - type: horizontal-stack
+    cards:
+      - type: button
+        name: OFF
+        icon: mdi:power-off
+        tap_action:
+          action: call-service
+          service: select.select_option
+          target:
+            entity_id: select.heater_mode
+          data:
+            option: "Off"
+      - type: button
+        name: AUTO
+        icon: mdi:thermostat-auto
+        tap_action:
+          action: call-service
+          service: select.select_option
+          target:
+            entity_id: select.heater_mode
+          data:
+            option: "Auto"
+      - type: button
+        name: HEAT
+        icon: mdi:fire
+        tap_action:
+          action: call-service
+          service: select.select_option
+          target:
+            entity_id: select.heater_mode
+          data:
+            option: "Heat"
+  # Target Temperature
+  - type: number
+    entity: number.target_temperature
+    name: Target Temperature
+  # Status
+  - type: entities
+    title: Status
+    entities:
+      - entity: binary_sensor.on_off_state
+        name: Heater On
+      - entity: binary_sensor.auto_shutdown_active
+        name: Auto Shutdown
+      - entity: binary_sensor.standby_active
+        name: Standby
+  # Diagnostics
+  - type: entities
+    title: Diagnostics
+    entities:
+      - entity: sensor.fan_speed
+      - entity: sensor.pump_frequency
+      - entity: sensor.heat_exchanger_temperature
+      - entity: sensor.supply_voltage
+      - entity: button.fuel_prime
