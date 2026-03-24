@@ -1,0 +1,201 @@
+Here’s the ignition sequence as a concrete step‑by‑step, stitched together from the decoded protocol and the author’s oscilloscope/log captures.
+
+---
+
+### Overview of the main phases
+
+1. **Start command & acknowledgement**  
+2. **Air purge / initial fan spin‑up**  
+3. **Glow plug pre‑heat**  
+4. **Ignition & flame stabilization**  
+5. **Warm‑up to normal running**
+
+I’ll walk through each phase with: run state, fan, heat exchanger temperature, glow plug, and fuel pump, plus which bytes report them.
+
+---
+
+### 1. Start command & acknowledgement
+
+**Trigger:**
+
+- **Controller → Heater:**  
+  - `Tx Byte[2] = A0h` once to request start.  
+- **Heater → Controller:**  
+  - `Rx Byte[2] = 1` (*Run State: Start Acknowledge*).
+
+**Key values / sensors:**
+
+- **Fan speed:** Still stopped or just about to start.  
+  - `Rx Bytes[6..7]` = fan RPM (0 or very low).  
+- **Heat exchanger temperature:** Near ambient.  
+  - `Rx Bytes[10..11]` = body temp in °C.  
+- **Glow plug:** Off.  
+  - `Rx Bytes[12..13]` ≈ 0 V, `Rx Bytes[14..15]` ≈ 0 A.  
+- **Fuel pump:** Off.  
+  - `Rx Byte[16]` = 0.0 Hz (no pulses yet).
+
+This is the instant the heater “accepts” the start request but hasn’t begun real work.
+
+---
+
+### 2. Air purge / initial fan spin‑up
+
+This is not labeled as a separate run state in the document, but it’s visible in the captured startup traces as the fan begins moving air before and while the glow plug heats.
+
+**Run state:**
+
+- Usually still in **State 1 (Start Acknowledge)** transitioning into **State 2 (Glow plug pre‑heat)**.
+
+**Fan:**
+
+- **Starts and ramps to a low–moderate RPM** to move fresh air through the combustion chamber.  
+  - `Rx Bytes[6..7]`: RPM rising from 0 upward, staying below configured maximum fan speed.
+- **Fan voltage** rises as PWM duty increases.  
+  - `Rx Bytes[8..9]`: fan voltage in 0.1 V units, increasing above zero.
+
+**Heat exchanger temperature:**
+
+- Still near ambient; only a slow rise at this point.  
+  - `Rx Bytes[10..11]`: maybe creeping up a few °C at most.
+
+**Glow plug:**
+
+- Either still off at the very start of purge or just beginning to energize as the unit moves into run state 2.
+
+**Fuel pump:**
+
+- Still **off**: no fuel delivery during pure air purge.  
+  - `Rx Byte[16] = 0` Hz.
+
+---
+
+### 3. Glow plug pre‑heat (Run State 2)
+
+**Run state:**
+
+- `Rx Byte[2] = 2` → **Glow plug pre‑heat**.
+
+**Glow plug:**
+
+- Controlled as a **current‑limited load at ~10 A**:  
+  - Current (orange trace in the doc) “rockets up” to **10 A**, then is held there.  
+    - `Rx Bytes[14..15]`: glow plug current in 10 mA units (≈ 1000 counts at 10 A).  
+  - Voltage (blue trace) rises more slowly up to roughly **9 V** as the plug heats.  
+    - `Rx Bytes[12..13]`: glow plug voltage in 0.1 V units (≈ 90 counts at 9 V).  
+- Driven via a **buck regulator** controlled by 40 kHz PWM from the microcontroller.
+
+**Fan:**
+
+- Continues at a **modest RPM** to feed combustion air and carry heat into the exchanger but not at full blast:  
+  - `Rx Bytes[6..7]`: moderate RPM within user‑configured min/max limits.  
+  - `Rx Bytes[8..9]`: fan voltage at some intermediate value, reflecting PWM duty.
+
+**Heat exchanger temperature:**
+
+- Begins to **rise slowly** as the glow plug heats and radiates into the combustion chamber:  
+  - `Rx Bytes[10..11]`: rising a few 10s of °C but still below 100°C.
+
+**Fuel pump:**
+
+- **Still off during pure pre‑heat**. No pump pulses yet:  
+  - `Rx Byte[16] = 0` Hz.
+
+If the glow plug never draws current or is shorted/open, the heater detects this in this phase and throws **E‑03 (ignition plug failure)** via `Rx Byte[17]` and `Rx Byte[3]`.
+
+---
+
+### 4. Ignition & flame stabilization (Run State 4, with possible State 3 failures)
+
+When the controller judges the plug is hot enough, it introduces fuel and watches the temperature response.
+
+**Run states:**
+
+- **Normal path:**
+  - `Rx Byte[2]` transitions from **2 → 4**  
+    - **2 = Glow plug pre‑heat**  
+    - **4 = Ignited – heating to full temp phase**.
+- **Failed ignition:**
+  - If temperature doesn’t rise as expected after fuel introduction, it goes to **State 3: Failed ignition – pausing for retry**.
+
+**Glow plug:**
+
+- **Still energized at high current (~10 A)** through ignition to help light the mixture:  
+  - `Rx Bytes[14..15]`: still ≈ 10 A region.  
+  - `Rx Bytes[12..13]`: voltage remains near its earlier plateau (~9 V).
+
+**Fuel pump:**
+
+- **Starts pulsing**; pump frequency ramps up from 0:  
+  - `Rx Byte[16]`: rises from 0 Hz upward, within user‑configured min/max (`Tx Bytes[5..6]`).  
+- Behavior here:
+  - Initially low frequency (just enough fuel to light the flame).  
+  - Then **gradual increase** as the flame stabilizes and heater targets full power.
+
+**Fan:**
+
+- **Ramps up** in step with combustion, moving toward maximum set speed:  
+  - `Rx Bytes[6..7]`: RPM curve rising toward configured maximum fan (`Tx Bytes[9..10]`).  
+  - `Rx Bytes[8..9]`: fan voltage / PWM duty increasing.
+
+**Heat exchanger temperature:**
+
+- Once ignition occurs, **temperature climbs rapidly**:  
+  - `Rx Bytes[10..11]`: a strong upward slope in °C vs time.  
+- The LCD “heat bars” map to HX temperatures:  
+  - 1st green at 21°C, then 41°C, 61°C, 81°C, 101°C, 121°C, in 20°C steps.  
+  - So during this phase you see bars progressively fill as HX temp moves through these thresholds.
+
+**Fault behavior (failed ignition):**
+
+- If combustion doesn’t catch:
+  - `Rx Byte[2] = 3` (**Failed ignition – pausing for retry**).  
+  - `Rx Byte[17]` and `Rx Byte[3]` report **E‑09 “Fire is extinguished”** or related error.  
+  - Pump stops and fan may run to purge.
+
+---
+
+### 5. Warm‑up to normal running (Run State 4 → 5)
+
+The warm‑up phase is essentially **Run State 4 continuing until the HX is hot enough**, then transitioning into steady running.
+
+**Run state:**
+
+- **During warm‑up:**  
+  - `Rx Byte[2] = 4` – still in **Ignited – heating to full temp phase**.  
+- **Transition to steady running:**  
+  - When the **heat exchanger reaches ~100°C**, the heater “seems to consistently switch to Run State 5”:  
+    - `Rx Bytes[10..11] ≈ 100` (°C).  
+    - `Rx Byte[20]` is always `64h`, noted as “Run mode transition temp?” = 100°C.  
+  - Then `Rx Byte[2] = 5` → **Running**.
+
+**Glow plug:**
+
+- **Gradually reduced and then turned off** once the flame is self‑sustaining and HX temp is high:
+  - `Rx Bytes[14..15]`: current tails off from 10 A down toward 0.  
+  - `Rx Bytes[12..13]`: voltage drops as plug drive is removed.
+
+**Fuel pump:**
+
+- Now **within its steady‑state envelope**:
+  - `Rx Byte[16]`: pump frequency stabilized somewhere between min and max (0.1 Hz units).  
+  - Value depends on:
+    - Desired temperature (`Tx Byte[4]`)  
+    - Configured min/max pump (`Tx Bytes[5..6]`) and fan (`Tx Bytes[7..10]`)  
+    - Control mode (thermostatic vs fixed Hz).  
+- In **thermostatic mode**, during warm‑up the pump tends to be near the configured **maximum** until room temp slightly exceeds the setpoint, at which point it backs down.
+
+**Fan:**
+
+- **At or near maximum configured speed** during warm‑up to deliver rated power:  
+  - `Rx Bytes[6..7]`: approaching configured max RPM (`Tx Bytes[9..10]`).  
+  - As it enters full steady run (state 5), fan RPM is modulated as needed but remains high while heating hard.
+
+**Heat exchanger temperature:**
+
+- **Rises through ~100°C**, triggering the transition to **Run State 5**.  
+  - `Rx Bytes[10..11]`: ramping from tens of °C up past 100°C; after reaching 100°C, temperature may stabilize higher depending on load and control mode.  
+- From this point, the unit is “warmed up” and in normal operation:
+  - Thermostatic mode: cycles pump/fan between min and max within a roughly 2°C window around setpoint.  
+  - Fixed mode: holds a target pump frequency computed via the formula involving Tmin, Tmax, Pmin, Pmax, and desired temp.
+
+---
