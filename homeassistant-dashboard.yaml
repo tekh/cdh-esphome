@@ -1,30 +1,33 @@
 ### Remember to rename the entities. currently I need to add lab_heater_
-
-Full Dashboard with Mode Actions Integrated:
 type: vertical-stack
 cards:
-  # Header
   - type: glance
     title: Lab Heater
-    columns: 3
+    columns: 4
     entities:
-      - entity: sensor.room_temperature
-        name: Room
-      - entity: sensor.current_temperature
-        name: Heat Ex
-      - entity: sensor.run_state
+      - type: entity
+        entity: select.lab_heater_heater_mode
+        name: Mode
+        icon: mdi:power-settings
+      - entity: sensor.lab_heater_desired_temperature
+        name: Desired Temp
+        icon: mdi:thermometer
+      - entity: sensor.lab_heater_current_temperature
+        name: Room Temp
+        icon: mdi:fire
+      - entity: sensor.lab_heater_run_state
         name: Status
-  # Mode Selection Buttons
+        icon: mdi:information
   - type: horizontal-stack
     cards:
       - type: button
-        name: OFF
+        name: "OFF"
         icon: mdi:power-off
         tap_action:
           action: call-service
           service: select.select_option
           target:
-            entity_id: select.heater_mode
+            entity_id: select.lab_heater_heater_mode
           data:
             option: "Off"
       - type: button
@@ -34,9 +37,9 @@ cards:
           action: call-service
           service: select.select_option
           target:
-            entity_id: select.heater_mode
+            entity_id: select.lab_heater_heater_mode
           data:
-            option: "Auto"
+            option: Auto
       - type: button
         name: HEAT
         icon: mdi:fire
@@ -44,29 +47,115 @@ cards:
           action: call-service
           service: select.select_option
           target:
-            entity_id: select.heater_mode
+            entity_id: select.lab_heater_heater_mode
           data:
-            option: "Heat"
-  # Target Temperature
-  - type: number
-    entity: number.target_temperature
-    name: Target Temperature
-  # Status
+            option: Heat
+  - type: horizontal-stack
+    cards:
+      - type: button
+        name: Decrease
+        icon: mdi:minus
+        tap_action:
+          action: call-service
+          service: script.heater_temp_down
+        hold_action:
+          action: call-service
+          service: script.heater_temp_down
+          repeat: 500
+      - type: gauge
+        entity: number.lab_heater_target_temperature
+        name: Target
+        unit: °C
+        min: 8
+        max: 30
+        severity:
+          green: 18
+          yellow: 25
+          red: 28
+      - type: gauge
+        entity: sensor.lab_heater_room_humidity
+        name: Humidity
+        unit: "%"
+        min: 0
+        max: 100
+        severity:
+          green: 40
+          yellow: 30
+          red: 20
+      - type: button
+        name: Increase
+        icon: mdi:plus
+        tap_action:
+          action: call-service
+          service: script.heater_temp_up
+        hold_action:
+          action: call-service
+          service: script.heater_temp_up
+          repeat: 500
   - type: entities
     title: Status
+    show_header_toggle: false
     entities:
-      - entity: binary_sensor.on_off_state
+      - entity: binary_sensor.lab_heater_on_off_state
         name: Heater On
-      - entity: binary_sensor.auto_shutdown_active
+      - entity: binary_sensor.lab_heater_auto_shutdown_active
         name: Auto Shutdown
-      - entity: binary_sensor.standby_active
+      - entity: binary_sensor.lab_heater_standby_active
         name: Standby
-  # Diagnostics
+      - entity: binary_sensor.lab_heater_priming_active
+        name: Priming
+  - type: horizontal-stack
+    cards:
+      - type: gauge
+        entity: sensor.lab_heater_room_temperature
+        name: Room Temp
+        unit: °C
+        min: 0
+        max: 35
+        severity:
+          green: 18
+          yellow: 15
+          red: 10
   - type: entities
-    title: Diagnostics
+    title: Heater Diagnostics
+    show_header_toggle: false
     entities:
-      - entity: sensor.fan_speed
-      - entity: sensor.pump_frequency
-      - entity: sensor.heat_exchanger_temperature
-      - entity: sensor.supply_voltage
-      - entity: button.fuel_prime
+      - entity: sensor.lab_heater_fan_speed
+        name: Fan Speed
+        icon: mdi:fan
+      - entity: sensor.lab_heater_pump_frequency
+        name: Pump Frequency
+        icon: mdi:fuel
+      - entity: sensor.lab_heater_heat_exchanger_temperature
+        name: Heat Exchanger Temp
+        icon: mdi:radiator
+      - entity: sensor.lab_heater_supply_voltage
+        name: Supply Voltage
+        icon: mdi:flash
+      - entity: sensor.lab_heater_glow_plug_voltage
+        name: Glow Plug Voltage
+        icon: mdi:flash-circle
+      - entity: sensor.lab_heater_glow_plug_current
+        name: Glow Plug Current
+        icon: mdi:flash-auto
+      - entity: sensor.lab_heater_fan_voltage
+        name: Fan Voltage
+        icon: mdi:flash-outline
+  - type: conditional
+    conditions:
+      - entity: sensor.lab_heater_error_code
+        state_not: No Error
+    card:
+      type: entities
+      title: Error
+      entities:
+        - entity: sensor.lab_heater_error_code
+          name: Error Code
+          icon: mdi:alert-circle
+  - type: entities
+    title: Actions
+    show_header_toggle: false
+    entities:
+      - entity: button.lab_heater_fuel_prime
+        name: Prime Fuel
+        icon: mdi:fuel

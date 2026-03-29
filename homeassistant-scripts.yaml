@@ -1,0 +1,21 @@
+# used for lab_heater (cdh-esphome)
+heater_temp_up:
+  alias: "Heater Temp Up"
+  mode: restart
+  sequence:
+    - service: number.set_value
+      target:
+        entity_id: number.lab_heater_target_temperature
+      data:
+        value: >
+          {{ [states('number.lab_heater_target_temperature') | float(0) + 0.5, 30] | min }}
+heater_temp_down:
+  alias: "Heater Temp Down"
+  mode: restart
+  sequence:
+    - service: number.set_value
+      target:
+        entity_id: number.lab_heater_target_temperature
+      data:
+        value: >
+          {{ [states('number.lab_heater_target_temperature') | float(0) - 0.5, 8] | max }}
