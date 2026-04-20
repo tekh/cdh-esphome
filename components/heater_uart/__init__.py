@@ -17,6 +17,7 @@ CONF_ALTITUDE = "altitude"
 CONF_AUTO_SHUTDOWN_OVERSHOOT = "auto_shutdown_overshoot"
 CONF_AUTO_SHUTDOWN_HYSTERESIS = "auto_shutdown_hysteresis"
 CONF_APPROACH_THRESHOLD = "approach_threshold"
+CONF_AMBIENT_HEAT_LIMIT = "ambient_heat_limit"
 
 # Operating voltage constants (must match C++ values)
 VOLTAGE_12V = 0x78  # 120 = 12.0V
@@ -36,6 +37,7 @@ CONFIG_SCHEMA = cv.Schema(
         cv.Optional(CONF_AUTO_SHUTDOWN_OVERSHOOT, default=0.5): cv.float_range(min=0.0, max=3.0),
         cv.Optional(CONF_AUTO_SHUTDOWN_HYSTERESIS, default=1.5): cv.float_range(min=0.5, max=5.0),
         cv.Optional(CONF_APPROACH_THRESHOLD, default=1.0): cv.float_range(min=0.5, max=3.0),
+        cv.Optional(CONF_AMBIENT_HEAT_LIMIT, default=26.0): cv.float_range(min=-40.0, max=80.0),
     }
 ).extend(uart.UART_DEVICE_SCHEMA)
 
@@ -57,6 +59,9 @@ async def to_code(config):
     cg.add(var.set_auto_shutdown_overshoot(config[CONF_AUTO_SHUTDOWN_OVERSHOOT]))
     cg.add(var.set_auto_shutdown_hysteresis(config[CONF_AUTO_SHUTDOWN_HYSTERESIS]))
     cg.add(var.set_approach_threshold(config[CONF_APPROACH_THRESHOLD]))
+
+    # Configure ambient heat limit (HEAT mode safety)
+    cg.add(var.set_ambient_heat_limit(config[CONF_AMBIENT_HEAT_LIMIT]))
 
     # Configure external temperature sensor (for standalone mode)
     if CONF_TEMPERATURE_SENSOR in config:

@@ -14,7 +14,9 @@
 namespace esphome {
 namespace heater_uart {
 
-// Heater operating mode
+// Ambient temperature limit for HEAT mode safety (configurable via config)
+static const float AMBIENT_HEAT_LIMIT = 26.0f;
+
 enum class HeaterMode : uint8_t {
   OFF = 0,   // Heater stays off
   AUTO = 1,  // Thermostat controls - auto-shutdown/restart enabled
@@ -37,7 +39,6 @@ static const uint8_t RUN_STATE_STOP_ACK = 6;
 static const uint8_t RUN_STATE_POST_GLOW = 7;
 static const uint8_t RUN_STATE_COOLDOWN = 8;
 
-// Temperature limits (from protocol)
 static const uint8_t TEMP_MIN = 0;
 static const uint8_t TEMP_MAX = 30;
 
@@ -100,6 +101,7 @@ class HeaterUart : public PollingComponent, public uart::UARTDevice {
   void set_auto_shutdown_overshoot(float overshoot) { this->auto_shutdown_overshoot_ = overshoot; }
   void set_auto_shutdown_hysteresis(float hysteresis) { this->auto_shutdown_hysteresis_ = hysteresis; }
   void set_approach_threshold(float threshold) { this->approach_threshold_ = threshold; }
+  void set_ambient_heat_limit(float limit) { this->ambient_heat_limit_ = limit; }
 
   // Heater mode control
   void set_heater_mode(HeaterMode mode);
@@ -144,11 +146,11 @@ class HeaterUart : public PollingComponent, public uart::UARTDevice {
   // Pump frequency number reference (for state sync)
   number::Number *pump_number_{nullptr};
 
-  // Mode select reference (for state sync)
-  select::Select *mode_select_{nullptr};
+   // Mode select reference (for state sync)
+   select::Select *mode_select_{nullptr};
 
-  // Heater operating mode
-  HeaterMode heater_mode_ = HeaterMode::OFF;
+   float ambient_heat_limit_ = AMBIENT_HEAT_LIMIT; // Configurable limit for HEAT mode shutdown
+   HeaterMode heater_mode_ = HeaterMode::OFF;
 
   // Pump frequency setting (Hz, for fixed Hz mode)
   float pump_freq_setting_ = 1.6f;  // Default to low pump rate

@@ -1,7 +1,7 @@
 # PROJECT KNOWLEDGE BASE
 
-**Generated:** 2026-03-16
-**Commit:** e1d361b
+**Generated:** 2026-04-19
+**Commit:** 5a9ed63
 **Branch:** full_control_w_autoshutoff
 
 ## OVERVIEW
@@ -17,10 +17,15 @@ ESPHome external component for UART communication with diesel heaters. Parses 48
 │   ├── __init__.py            # ESPHome schema registration
 │   ├── sensor.py              # 9 numeric sensors
 │   ├── text_sensor.py         # 2 text sensors (run_state, error_code)
-│   ├── binary_sensor.py       # 3 binary sensors
+│   ├── binary_sensor.py       # 4 binary sensors
 │   ├── number.py              # Temperature + pump frequency control
 │   ├── select.py              # Mode selection (Off/Auto/Heat)
-│   └── button.py              # Fuel priming button
+│   ├── button.py              # Fuel priming button
+│   ├── heater_number.cpp/h    # Temperature number entity
+│   ├── heater_pump_number.cpp/h  # Pump frequency number entity
+│   ├── heater_select.cpp/h    # Mode select entity
+│   ├── fuel_prime_button.h    # Fuel prime button entity
+│   └── heater_uart.json       # ESPHome component manifest
 ├── @notes/bluetoothheater-master/  # Reference implementation (read-only)
 └── README.md
 ```
@@ -33,22 +38,30 @@ ESPHome external component for UART communication with diesel heaters. Parses 48
 | Modify frame parsing | `heater_uart.cpp:parse_frame()` | Byte positions match hardware protocol |
 | Add control entity | `number.py`/`select.py` + corresponding `.h/.cpp` | Follow HeaterNumber pattern |
 | Thermostat logic | `heater_uart.cpp:standalone_loop()` | Auto mode, cooldown, pump control |
+| Standalone RX parsing | `heater_uart.cpp:parse_rx_frame()` | 24-byte RX frame in standalone mode |
+| TX frame construction | `heater_uart.cpp:build_tx_frame()` | Build 24-byte TX frame for heater |
+| Fuel priming | `heater_uart.cpp:start_priming()`/`stop_priming()` | 60s pump-only run for bleeding air |
 | State mappings | `heater_uart.cpp` static maps | `run_state_map`, `error_code_map` |
 
 ## CODE MAP
 
 | Symbol | Type | Location | Role |
 |--------|------|----------|------|
-| `HeaterUart` | class | `heater_uart.h:85` | Main component - frame parsing, control |
-| `HeaterMode` | enum | `heater_uart.h:18` | OFF, AUTO, ON modes |
-| `parse_frame()` | method | `heater_uart.cpp` | Parse 48-byte UART frame |
-| `standalone_loop()` | method | `heater_uart.cpp` | Thermostat control logic |
-| `build_tx_frame()` | method | `heater_uart.cpp` | Construct TX frame for heater |
+| `HeaterUart` | class | `heater_uart.h:84` | Main component - frame parsing, control |
+| `HeaterMode` | enum | `heater_uart.h:21` | OFF, AUTO, ON modes |
+| `parse_frame()` | method | `heater_uart.cpp:208` | Parse 48-byte UART frame (LCD mode) |
+| `standalone_loop()` | method | `heater_uart.cpp:443` | Thermostat control logic (standalone mode) |
+| `build_tx_frame()` | method | `heater_uart.cpp:507` | Construct TX frame for heater |
+| `send_standalone_frame()` | method | `heater_uart.cpp:611` | Send frame and manage RX timeout |
+| `parse_rx_frame()` | method | `heater_uart.cpp:661` | Parse 24-byte RX frame in standalone mode |
+| `start_priming()` | method | `heater_uart.cpp:951` | Start fuel priming (60s pump-only) |
+| `stop_priming()` | method | `heater_uart.cpp:980` | Stop fuel priming |
 
 ## CONVENTIONS
 
 **UART Protocol:**
-- 48-byte frames: TX (bytes 0-23) + RX (bytes 24-47)
+- LCD mode: 48-byte frames: TX (bytes 0-23) + RX (bytes 24-47)
+- Standalone mode: Separate 24-byte TX and RX frames
 - Start marker: `0x76` at bytes 0 and 24
 - End marker: `0x00` at bytes 21 and 45
 - Baud rate: 25000 (heater-specific)

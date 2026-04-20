@@ -78,6 +78,7 @@ heater_uart:
     auto_shutdown_overshoot: 0.5   # Trigger when room > target + 0.5°C at min pump AND pump has reached 1.3hz
     auto_shutdown_hysteresis: 1.5  # Restart when room < target - 1.5°C
     approach_threshold: 1.0        # Start reducing pump when within 1°C of target (gentler approach)
+    ambient_heat_limit: 26.0       # HEAT mode not AUTO safety limit - force shutdown if room > 26°C (range: -40 to 80°C)
 
 select:
   - platform: heater_uart

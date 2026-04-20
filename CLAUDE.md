@@ -22,18 +22,39 @@ The codebase follows ESPHome's external component architecture with C++ implemen
 - `__init__.py`: Component configuration schema and registration
 - `sensor.py`: Defines 9 numeric sensors (temperature, voltage, current, etc.)
 - `text_sensor.py`: Defines 2 text sensors (run_state, error_code)
-- `binary_sensor.py`: Defines 1 binary sensor (on_off_state)
+- `binary_sensor.py`: Defines 4 binary sensors (on_off_state, auto_shutdown_active, standby_active, priming_active)
+- `number.py`: Defines 2 number entities (desired_temperature, pump_frequency)
+- `select.py`: Defines mode select entity (Off/Auto/Heat)
+- `button.py`: Defines fuel prime button entity
 
 ### UART Frame Protocol
 
-The component expects 48-byte frames structured as:
+The component supports two modes:
+
+**LCD Mode** (passive monitoring): Expects 48-byte frames structured as:
 - Bytes 0-23: Command/TX frame (starts with 0x76, ends with 0x00 at byte 21)
 - Bytes 24-47: Response/RX frame (starts with 0x76 at byte 24, ends with 0x00 at byte 45)
+
+**Standalone Mode** (active control): ESP32 is the controller, sends/receives separate 24-byte frames at 1Hz:
+- TX: 24-byte frame constructed in `build_tx_frame()`
+- RX: 24-byte response parsed in `parse_rx_frame()`
+- Half-duplex: TX and RX on the same GPIO pin
 
 Frame parsing extracts:
 - Current/desired temperature from command frame
 - All sensor values from response frame (fan speed, voltages, currents, states)
 - Run state and error codes are mapped to human-readable descriptions via static maps
+
+### Standalone Mode
+
+When `standalone_mode: true`, the ESP32 acts as the heater controller with full thermostat capability:
+- `standalone_loop()`: Main loop — processes RX, manages thermostat, sends TX frames
+- `build_tx_frame()`: Constructs 24-byte TX frame with temperature, pump frequency, fan speed
+- `send_standalone_frame()`: Sends TX frame and manages RX timeout
+- `parse_rx_frame()`: Parses 24-byte RX response and updates all sensor values
+- Thermostat logic: AUTO mode with auto-shutdown/restart, HEAT mode with ambient limit
+- Pump control: Frequency ramping (1.3-5.5 Hz) based on temperature gap and HX temp safety
+- Fuel priming: 60-second pump-only run via `start_priming()`/`stop_priming()`
 
 ### Key Implementation Details
 
@@ -85,13 +106,23 @@ This will show UART frame parsing details and validation warnings.
 **Adding New Sensors**:
 1. Add sensor definition to Python sensor type file (sensor.py, text_sensor.py, or binary_sensor.py)
 2. Add corresponding member variable in `heater_uart.h`
-3. Parse the value in `parse_frame()` in `heater_uart.cpp`
+3. Parse the value in `parse_frame()` or `parse_rx_frame()` in `heater_uart.cpp`
 4. Publish the value in `update()` in `heater_uart.cpp`
+
+**Adding New Control Entities**:
+1. Create Python schema file (number.py, select.py, button.py)
+2. Create C++ entity class (.h/.cpp files following HeaterNumber pattern)
+3. Add setter in `heater_uart.h`, register in `__init__.py`
 
 **Modifying Frame Parsing**:
 - Frame structure is defined by the heater hardware
 - Byte positions in `parse_frame()` correspond to heater protocol specification
 - Multi-byte values use big-endian byte order: `(high_byte << 8) | low_byte`
+
+**Modifying Thermostat Logic**:
+- All thermostat logic is in `standalone_loop()` (heater_uart.cpp)
+- Pump frequency adjustment in `parse_rx_frame()` after RX processing
+- Safety limits: HX_TEMP_CRITICAL (265°C), ambient_heat_limit (default 26°C)
 
 **State Mappings**:
 - `run_state_map` and `error_code_map` in `heater_uart.cpp` provide human-readable descriptions

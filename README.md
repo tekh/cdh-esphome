@@ -23,9 +23,12 @@ This project is a custom ESPHome component designed to interface with heaters us
   - On/Off State
   - Auto Shutdown Active
   - Standby Active
+  - Priming Active
 - **Text Sensors**:
   - Run State
   - Error Code
+- **Button**:
+  - Fuel Prime (60s pump-only run for bleeding air)
 - **Automatic Temperature Control**:
   - Auto-shutdown when target temperature is reached
   - Auto-restart when temperature drops below threshold
@@ -84,6 +87,7 @@ Fine-tune the Auto mode behavior with these parameters:
 - `auto_shutdown_overshoot` (default: 0.5°C): Temperature above target before auto-shutdown triggers
 - `auto_shutdown_hysteresis` (default: 1.5°C): Temperature drop needed before auto-restart
 - `approach_threshold` (default: 2.0°C): Distance from target when approach control begins
+- `ambient_heat_limit` (default: 26.0°C): HEAT mode safety limit - forces shutdown if room > X°C (range: -40 to 80°C)
 
 Example configuration:
 ```yaml
@@ -92,6 +96,7 @@ heater_uart:
   auto_shutdown_overshoot: 0.5
   auto_shutdown_hysteresis: 1.5
   approach_threshold: 2.0
+  ambient_heat_limit: 26.0  # HEAT mode safety limit (°C)
 ```
 
 ### Mode Options
@@ -100,7 +105,7 @@ The mode select entity provides three operating modes:
 
 - **Off**: Heater is forced off (enters cooldown if running)
 - **Auto**: Thermostat-controlled operation with auto-shutdown and auto-restart
-- **On**: Heater is forced on, bypassing thermostat control (safety limits still apply)
+- **On**: Heater is forced on, bypassing thermostat control. Safety limits still apply including the ambient heat limit.
 
 ## Getting Started
 
@@ -199,6 +204,13 @@ binary_sensor:
       name: "Auto Shutdown Active"
     standby_active:
       name: "Standby Mode"
+    priming_active:
+      name: "Fuel Priming Active"
+
+button:
+  - platform: heater_uart
+    fuel_prime:
+      name: "Fuel Prime"
 ```
 
 ### Notes
@@ -212,11 +224,12 @@ binary_sensor:
 - External temperature sensor is highly recommended for accurate room temperature control.
 - Without an external sensor, the component will use heat exchanger temperature as a fallback.
 - In Auto mode, the heater will automatically manage itself between `desired_temperature ± hysteresis`.
+- In HEAT mode (On), the ambient heat limit provides additional safety by forcing shutdown if room temperature exceeds the configured threshold.
 
 **Mode Select Usage:**
 - **Off**: Forces heater off. Use this when you don't want the heater to run.
 - **Auto**: Thermostat mode. Heater will auto-start when cold and auto-shutdown when warm.
-- **On**: Forces heater on, bypassing thermostat. Safety limits (heat exchanger temperature) still apply.
+- **On**: Forces heater on, bypassing thermostat. Safety limits (heat exchanger temperature) AND ambient heat limit still apply.
 
 ## Development
 

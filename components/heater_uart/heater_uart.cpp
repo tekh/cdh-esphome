@@ -63,6 +63,9 @@ void HeaterUart::setup() {
     memset(last_tx_frame_, 0, sizeof(last_tx_frame_));
     memset(rx_frame_, 0, sizeof(rx_frame_));
 
+    // Initialize ambient limit from config (default is 26.0f)
+    set_ambient_heat_limit(AMBIENT_HEAT_LIMIT);
+
     if (standalone_mode_) {
         ESP_LOGI(TAG, "Running in STANDALONE mode - ESP32 is the heater controller");
         ESP_LOGI(TAG, "Operating voltage: %s", operating_voltage_ == VOLTAGE_12V ? "12V" : "24V");
@@ -440,7 +443,13 @@ uint16_t HeaterUart::calc_crc16(const uint8_t *data, size_t length) {
 void HeaterUart::standalone_loop() {
     uint32_t now = millis();
 
-    // If we're waiting for RX response
+        // === AMBIENT HEAT LIMIT CHECK (HEAT Mode ONLY) ===
+	if (heater_mode_ == HeaterMode::ON && current_temperature_value_ > ambient_heat_limit_) {
+            ESP_LOGW(TAG, "Ambient Limit Exceeded in HEAT mode: Room %.1f°C > Limit %.1f°C. Forcing shutdown.",
+                     current_temperature_value_, ambient_heat_limit_);
+            pending_on_off_command_ = CMD_STOP;
+            in_cooldown_ = true; // Start cooldown sequence immediately
+        }
     if (awaiting_rx_) {
         while (available()) {
             uint8_t byte = read();
