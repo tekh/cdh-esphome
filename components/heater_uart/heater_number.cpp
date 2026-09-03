@@ -25,10 +25,10 @@ void HeaterTemperatureNumber::control(float value) {
         return;
     }
 
-    // Round to nearest 0.5 degree and clamp
+    // Round to nearest 0.5 degree, then clamp to the active profile's temperature range
     float rounded = std::round(value * 2.0f) / 2.0f;
-    if (rounded < TEMP_MIN) rounded = TEMP_MIN;
-    if (rounded > TEMP_MAX) rounded = TEMP_MAX;
+    if (rounded < this->parent_->get_temp_min()) rounded = this->parent_->get_temp_min();
+    if (rounded > this->parent_->get_temp_max()) rounded = this->parent_->get_temp_max();
 
     ESP_LOGI(TAG, "Setting desired temperature to %.1f°C", rounded);
     this->parent_->set_desired_temperature(rounded);

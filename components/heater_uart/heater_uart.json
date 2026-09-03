@@ -1,10 +1,11 @@
 {
   "name": "heater_uart",
-  "version": "1.0.0",
+  "version": "1.1.0",
   "dependencies": ["sensor", "text_sensor", "binary_sensor", "uart"],
   "files": [
     "heater_uart.h",
     "heater_uart.cpp",
+    "heater_profile.h",
     "__init__.py"
   ]
 }

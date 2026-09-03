@@ -9,6 +9,7 @@ HeaterUart = heater_uart_ns.class_("HeaterUart", cg.Component, uart.UARTDevice)
 DEPENDENCIES = ["uart"]
 
 # Configuration keys
+CONF_HEATER_MODEL = "heater_model"
 CONF_STANDALONE_MODE = "standalone_mode"
 CONF_OPERATING_VOLTAGE = "operating_voltage"
 CONF_TEMPERATURE_SENSOR = "temperature_sensor"
@@ -23,10 +24,21 @@ CONF_AMBIENT_HEAT_LIMIT = "ambient_heat_limit"
 VOLTAGE_12V = 0x78  # 120 = 12.0V
 VOLTAGE_24V = 0xF0  # 240 = 24.0V
 
+# Heater model enum (must match HeaterModel in heater_profile.h).
+# Scoped enum (`enum class`) -> is_class=True renders `heater_uart::HeaterModel::X`.
+# Members are referenced by attribute access; MockObj builds them lazily.
+HeaterModel = heater_uart_ns.enum("HeaterModel", is_class=True)
+
 CONFIG_SCHEMA = cv.Schema(
     {
         cv.GenerateID(): cv.declare_id(HeaterUart),
         cv.Optional("update_interval", default="5s"): cv.update_interval,
+        # Required: which physical heater is connected. The selected profile
+        # drives pump/fan/HX limits -> never leave this implicit.
+        cv.Required(CONF_HEATER_MODEL): cv.enum(
+            {"jeabong_8kw": HeaterModel.JEABONG_8KW, "vevor_2kw": HeaterModel.VEVOR_2KW},
+            lower=True,
+        ),
         cv.Optional(CONF_STANDALONE_MODE, default=False): cv.boolean,
         cv.Optional(CONF_OPERATING_VOLTAGE, default="12V"): cv.enum(
             {"12V": VOLTAGE_12V, "24V": VOLTAGE_24V}, upper=True
@@ -50,6 +62,7 @@ async def to_code(config):
         cg.add(var.set_update_interval(config["update_interval"]))
 
     # Configure standalone mode
+    cg.add(var.set_heater_model(config[CONF_HEATER_MODEL]))
     cg.add(var.set_standalone_mode(config[CONF_STANDALONE_MODE]))
     cg.add(var.set_operating_voltage(config[CONF_OPERATING_VOLTAGE]))
     cg.add(var.set_temperature_backoff(config[CONF_TEMPERATURE_BACKOFF]))

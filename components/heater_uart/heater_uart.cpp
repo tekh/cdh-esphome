@@ -63,14 +63,22 @@ void HeaterUart::setup() {
     memset(last_tx_frame_, 0, sizeof(last_tx_frame_));
     memset(rx_frame_, 0, sizeof(rx_frame_));
 
-    // Initialize ambient limit from config (default is 26.0f)
-    set_ambient_heat_limit(AMBIENT_HEAT_LIMIT);
+    // Re-apply the profile selected by `heater_model:` (fallback: 8kW defaults).
+    // NOTE: ambient heat limit is NOT reset here - it comes from YAML only.
+    this->profile_ = profile_for(this->profile_.model);
 
     if (standalone_mode_) {
+        // Start the pump at the profile's ignition rate
+        pump_freq_setting_ = profile_.pump_freq_initial;
+
         ESP_LOGI(TAG, "Running in STANDALONE mode - ESP32 is the heater controller");
+        ESP_LOGI(TAG, "Heater model: %s | pump %.1f-%.1f Hz | fan %u-%u RPM | HX critical %.0f C | temp %u-%u C",
+                 profile_.name, profile_.pump_freq_min, profile_.pump_freq_max,
+                 profile_.fan_rpm_min, profile_.fan_rpm_max, profile_.hx_temp_critical,
+                 profile_.temp_min, profile_.temp_max);
         ESP_LOGI(TAG, "Operating voltage: %s", operating_voltage_ == VOLTAGE_12V ? "12V" : "24V");
         ESP_LOGI(TAG, "Altitude: %d m", altitude_);
-        ESP_LOGI(TAG, "Initial desired temperature: %d°C", desired_temp_setting_);
+        ESP_LOGI(TAG, "Initial desired temperature: %.1f°C", desired_temp_setting_);
     } else {
         ESP_LOGI(TAG, "Running in INJECTION mode - working alongside LCD controller");
     }
@@ -259,7 +267,7 @@ void HeaterUart::turn_on() {
         pending_on_off_command_ = CMD_START;
         heater_on_request_ = true;
         // Set pump to initial ignition frequency - will ramp up after flame stabilizes
-        pump_freq_setting_ = PUMP_FREQ_INITIAL;
+        pump_freq_setting_ = profile_.pump_freq_initial;
         last_pump_adjust_time_ = millis();  // Reset adjustment timer
         ESP_LOGI(TAG, "Pump frequency set to %.1f Hz for ignition", pump_freq_setting_);
     } else {
@@ -293,8 +301,8 @@ void HeaterUart::set_desired_temperature(float temperature) {
     // Round to nearest 0.5 degree
     float rounded = std::round(temperature * 2.0f) / 2.0f;
 
-    if (rounded < TEMP_MIN || rounded > TEMP_MAX) {
-        ESP_LOGW(TAG, "Temperature %.1f out of range (%d-%d)", rounded, TEMP_MIN, TEMP_MAX);
+    if (rounded < profile_.temp_min || rounded > profile_.temp_max) {
+        ESP_LOGW(TAG, "Temperature %.1f out of range (%d-%d)", rounded, profile_.temp_min, profile_.temp_max);
         return;
     }
 
@@ -313,9 +321,9 @@ void HeaterUart::set_desired_temperature(float temperature) {
 }
 
 void HeaterUart::set_pump_frequency(float frequency) {
-    if (frequency < PUMP_FREQ_MIN || frequency > PUMP_FREQ_MAX) {
+    if (frequency < profile_.pump_freq_min || frequency > profile_.pump_freq_max) {
         ESP_LOGW(TAG, "Pump frequency %.1f out of range (%.1f-%.1f Hz)",
-                 frequency, PUMP_FREQ_MIN, PUMP_FREQ_MAX);
+                 frequency, profile_.pump_freq_min, profile_.pump_freq_max);
         return;
     }
 
@@ -354,7 +362,7 @@ void HeaterUart::set_heater_mode(HeaterMode mode) {
                      room_temp, threshold);
             pending_on_off_command_ = CMD_START;
             heater_on_request_ = true;
-            pump_freq_setting_ = PUMP_FREQ_INITIAL;
+            pump_freq_setting_ = profile_.pump_freq_initial;
             last_pump_adjust_time_ = millis();
             in_standby_ = false;
         } else {
@@ -376,7 +384,7 @@ void HeaterUart::set_heater_mode(HeaterMode mode) {
         ESP_LOGI(TAG, "Mode On: forcing heater start");
         pending_on_off_command_ = CMD_START;
         heater_on_request_ = true;
-        pump_freq_setting_ = PUMP_FREQ_INITIAL;
+        pump_freq_setting_ = profile_.pump_freq_initial;
         last_pump_adjust_time_ = millis();
         in_standby_ = false;
         in_auto_shutdown_ = false;
@@ -533,10 +541,10 @@ void HeaterUart::build_tx_frame(uint8_t *frame, uint8_t command) {
 
     // Bytes 5-6: Pump frequency (0.1 Hz units)
     // Set both min and max to same value for fixed Hz mode (direct pump control)
-    // During priming, override with 5.0 Hz to run pump without starting heater
+    // During priming, override with the profile's prime rate to run pump without starting heater
     uint8_t pump_freq_raw;
     if (is_priming_) {
-        pump_freq_raw = 0x32;  // 5.0 Hz for priming
+        pump_freq_raw = static_cast<uint8_t>(profile_.pump_prime_freq * 10.0f);  // Hz -> 0.1 Hz units
     } else {
         pump_freq_raw = static_cast<uint8_t>(pump_freq_setting_ * 10.0f);
     }
@@ -548,20 +556,20 @@ void HeaterUart::build_tx_frame(uint8_t *frame, uint8_t command) {
 
     if (in_cooldown_ || run_state_value_ == RUN_STATE_COOLDOWN) {
         // Cooldown mode: run fan at high speed to cool heat exchanger
-        fan_rpm = COOLDOWN_FAN_RPM;
-    } else if (run_state_value_ == RUN_STATE_IGNITED && heat_exchanger_temp_value_ < 100.0f) {
-        // State 4 (Ignited) with HX < 100°C: Keep fan at moderate speed for stable combustion
-        // Pump can ramp up, but fan should wait until HX >= 100°C to scale with pump
-        fan_rpm = IGNITION_FAN_RPM;
-        ESP_LOGD(TAG, "Ignition: HX %.0f°C < 100°C, fan at ignition speed %d RPM",
-                 heat_exchanger_temp_value_, fan_rpm);
+        fan_rpm = profile_.cooldown_fan_rpm;
+    } else if (run_state_value_ == RUN_STATE_IGNITED && heat_exchanger_temp_value_ < profile_.ignition_hx_threshold) {
+        // State 4 (Ignited) with HX below threshold: keep fan at moderate speed for stable combustion
+        // Pump can ramp up, but fan should wait until HX >= threshold to scale with pump
+        fan_rpm = profile_.ignition_fan_rpm;
+        ESP_LOGD(TAG, "Ignition: HX %.0f°C < %.0f°C, fan at ignition speed %d RPM",
+                 heat_exchanger_temp_value_, profile_.ignition_hx_threshold, fan_rpm);
     } else {
         // Normal operation: scale fan proportionally with pump frequency
         // This maintains proper combustion by matching fan speed to fuel rate.
-        float pump_ratio = (pump_freq_setting_ - PUMP_FREQ_MIN) / (PUMP_FREQ_MAX - PUMP_FREQ_MIN);
+        float pump_ratio = (pump_freq_setting_ - profile_.pump_freq_min) / (profile_.pump_freq_max - profile_.pump_freq_min);
         pump_ratio = std::max(0.0f, std::min(1.0f, pump_ratio));  // Clamp 0-1
         fan_rpm = static_cast<uint16_t>(
-            DEFAULT_MIN_FAN_RPM + pump_ratio * (DEFAULT_MAX_FAN_RPM - DEFAULT_MIN_FAN_RPM)
+            profile_.fan_rpm_min + pump_ratio * (profile_.fan_rpm_max - profile_.fan_rpm_min)
         );
     }
 
@@ -575,10 +583,10 @@ void HeaterUart::build_tx_frame(uint8_t *frame, uint8_t command) {
     frame[11] = operating_voltage_;
 
     // Byte 12: Fan sensor type
-    frame[12] = DEFAULT_FAN_SENSOR;
+    frame[12] = profile_.fan_sensor;
 
     // Byte 13: Glow plug power
-    frame[13] = DEFAULT_GLOW_POWER;
+    frame[13] = profile_.glow_power;
 
     // Bytes 14-15: Reserved (zeros)
     frame[14] = 0x00;
@@ -586,8 +594,8 @@ void HeaterUart::build_tx_frame(uint8_t *frame, uint8_t command) {
 
     // Bytes 16-17: Prime pump frequency (zeros = no priming)
     if (is_priming_) {
-        // Priming active: set prime pump frequency to 5.0 Hz
-        frame[16] = 0x32;  // 50 = 5.0 Hz in 0.1 Hz units
+        // Priming active: set prime pump frequency to the profile's prime rate
+        frame[16] = static_cast<uint8_t>(profile_.pump_prime_freq * 10.0f);  // Hz -> 0.1 Hz units
         frame[17] = 0x5A;  // Manual pump priming mode (protocol spec: 0x5A = priming, 0x00 = normal)
     } else {
         frame[16] = 0x00;
@@ -732,13 +740,13 @@ void HeaterUart::parse_rx_frame(const uint8_t *frame, size_t length) {
 
     // Cooldown monitoring: check if heat exchanger has cooled enough
     if (in_cooldown_ && standalone_mode_) {
-        if (hx_temp <= COOLDOWN_TARGET_TEMP) {
+        if (hx_temp <= profile_.cooldown_target_temp) {
             ESP_LOGI(TAG, "Cooldown complete: HX temp %.0f°C <= %.0f°C target. Fan stopping.",
-                     hx_temp, COOLDOWN_TARGET_TEMP);
+                     hx_temp, profile_.cooldown_target_temp);
             in_cooldown_ = false;
         } else {
             ESP_LOGD(TAG, "Cooldown in progress: HX temp %.0f°C (target: %.0f°C), Fan at %d RPM",
-                     hx_temp, COOLDOWN_TARGET_TEMP, COOLDOWN_FAN_RPM);
+                     hx_temp, profile_.cooldown_target_temp, profile_.cooldown_fan_rpm);
         }
         return;  // Skip thermostat logic during cooldown
     }
@@ -751,7 +759,7 @@ void HeaterUart::parse_rx_frame(const uint8_t *frame, size_t length) {
             ESP_LOGI(TAG, "Standby->Start: room %.1f°C < %.1f°C threshold", room_temp, threshold);
             pending_on_off_command_ = CMD_START;
             heater_on_request_ = true;
-            pump_freq_setting_ = PUMP_FREQ_INITIAL;
+            pump_freq_setting_ = profile_.pump_freq_initial;
             last_pump_adjust_time_ = millis();
             in_standby_ = false;
         }
@@ -769,14 +777,14 @@ void HeaterUart::parse_rx_frame(const uint8_t *frame, size_t length) {
         if (run_state_value_ == RUN_STATE_IGNITED) {
             // Heater has ignited - ramp pump to max to reach operating temp quickly
             // But respect the adjustment interval - thermal response takes time
-            if (pump_freq_setting_ < PUMP_FREQ_MAX) {
+            if (pump_freq_setting_ < profile_.pump_freq_max) {
                 if (now - last_pump_adjust_time_ >= PUMP_ADJUST_INTERVAL_MS) {
                     // Scale step based on how cold the room is
                     float temp_gap = target_temp - room_temp;
                     float multiplier = (temp_gap >= 5.0f) ? 3.0f : (temp_gap >= 2.0f) ? 2.0f : 1.0f;
-                    float step = PUMP_FREQ_STEP * multiplier;
+                    float step = profile_.pump_freq_step * multiplier;
 
-                    float new_freq = std::min(pump_freq_setting_ + step, PUMP_FREQ_MAX);
+                    float new_freq = std::min(pump_freq_setting_ + step, profile_.pump_freq_max);
                     ESP_LOGI(TAG, "Ignited (state 4): gap %.1f°C, ramping pump %.1f -> %.1f Hz (x%.0f)",
                              temp_gap, pump_freq_setting_, new_freq, multiplier);
                     pump_freq_setting_ = new_freq;
@@ -793,9 +801,9 @@ void HeaterUart::parse_rx_frame(const uint8_t *frame, size_t length) {
         }
 
         // === SAFETY: Emergency shutdown if heat exchanger is critically hot ===
-        if (hx_temp > HX_TEMP_CRITICAL) {
+        if (hx_temp > profile_.hx_temp_critical) {
             ESP_LOGE(TAG, "CRITICAL: Heat exchanger %.0f°C > %.0f°C limit! Emergency shutdown!",
-                     hx_temp, HX_TEMP_CRITICAL);
+                     hx_temp, profile_.hx_temp_critical);
             pending_on_off_command_ = CMD_STOP;
             heater_on_request_ = false;
             in_cooldown_ = true;
@@ -826,18 +834,18 @@ void HeaterUart::parse_rx_frame(const uint8_t *frame, size_t length) {
                 // HEATING PHASE: Room is cold, increase pump
                 // Larger gaps = more aggressive increase
                 float multiplier = (temp_gap >= 5.0f) ? 3.0f : (temp_gap >= 2.0f) ? 2.0f : 1.0f;
-                float step = PUMP_FREQ_STEP * multiplier;
+                float step = profile_.pump_freq_step * multiplier;
                 new_freq = pump_freq_setting_ + step;
-                if (new_freq <= PUMP_FREQ_MAX && new_freq != pump_freq_setting_) {
+                if (new_freq <= profile_.pump_freq_max && new_freq != pump_freq_setting_) {
                     ESP_LOGI(TAG, "Heating: room %.1f°C < %.1f°C, pump %.1f -> %.1f Hz (x%.0f)",
                              room_temp, approach_temp, pump_freq_setting_, new_freq, multiplier);
                 }
             } else if (room_temp < target_temp) {
                 // APPROACH PHASE: Within approach threshold, start reducing pump slowly
                 // This prevents overshoot by slowing down before reaching target
-                float step = PUMP_FREQ_STEP;  // Always 1x step for gentle approach
+                float step = profile_.pump_freq_step;  // Always 1x step for gentle approach
                 new_freq = pump_freq_setting_ - step;
-                if (new_freq >= PUMP_FREQ_MIN && new_freq != pump_freq_setting_) {
+                if (new_freq >= profile_.pump_freq_min && new_freq != pump_freq_setting_) {
                     ESP_LOGI(TAG, "Approach: room %.1f°C approaching %.1f°C, slowing pump %.1f -> %.1f Hz",
                              room_temp, target_temp, pump_freq_setting_, new_freq);
                 }
@@ -846,9 +854,9 @@ void HeaterUart::parse_rx_frame(const uint8_t *frame, size_t length) {
                 // Larger overshoot = more aggressive reduction
                 float overshoot = room_temp - target_temp;
                 float multiplier = (overshoot >= 1.0f) ? 3.0f : (overshoot >= 0.5f) ? 2.0f : 1.0f;
-                float step = PUMP_FREQ_STEP * multiplier;
+                float step = profile_.pump_freq_step * multiplier;
                 new_freq = pump_freq_setting_ - step;
-                if (new_freq >= PUMP_FREQ_MIN && new_freq != pump_freq_setting_) {
+                if (new_freq >= profile_.pump_freq_min && new_freq != pump_freq_setting_) {
                     ESP_LOGI(TAG, "At target: room %.1f°C >= %.1f°C, reducing pump %.1f -> %.1f Hz (x%.0f)",
                              room_temp, target_temp, pump_freq_setting_, new_freq, multiplier);
                 }
@@ -863,26 +871,26 @@ void HeaterUart::parse_rx_frame(const uint8_t *frame, size_t length) {
                 // HEATING PHASE: Room is cold, increase pump as needed
                 float temp_gap = target_temp - room_temp;
                 float multiplier = (temp_gap >= 5.0f) ? 3.0f : (temp_gap >= 2.0f) ? 2.0f : 1.0f;
-                float step = PUMP_FREQ_STEP * multiplier;
+                float step = profile_.pump_freq_step * multiplier;
                 new_freq = pump_freq_setting_ + step;
-                if (new_freq <= PUMP_FREQ_MAX && new_freq != pump_freq_setting_) {
+                if (new_freq <= profile_.pump_freq_max && new_freq != pump_freq_setting_) {
                     ESP_LOGI(TAG, "HEAT mode: room %.1f°C < %.1f°C, pump %.1f -> %.1f Hz (x%.0f)",
                              room_temp, approach_temp, pump_freq_setting_, new_freq, multiplier);
                 }
             } else {
                 // APPROACH/AT TARGET: Ramp down to minimum pump, keep running
                 // This maintains heat without overshooting too much
-                if (pump_freq_setting_ > PUMP_FREQ_MIN) {
+                if (pump_freq_setting_ > profile_.pump_freq_min) {
                     float overshoot = room_temp - target_temp;
                     float multiplier = (overshoot >= 1.0f) ? 3.0f : (overshoot >= 0.5f) ? 2.0f : 1.0f;
-                    float step = PUMP_FREQ_STEP * multiplier;
+                    float step = profile_.pump_freq_step * multiplier;
                     new_freq = pump_freq_setting_ - step;
-                    if (new_freq < PUMP_FREQ_MIN) {
-                        new_freq = PUMP_FREQ_MIN;
+                    if (new_freq < profile_.pump_freq_min) {
+                        new_freq = profile_.pump_freq_min;
                     }
                     if (new_freq != pump_freq_setting_) {
                         ESP_LOGI(TAG, "HEAT mode approach: room %.1f°C >= %.1f°C, pump %.1f -> %.1f Hz (min %.1f)",
-                                 room_temp, approach_temp, pump_freq_setting_, new_freq, PUMP_FREQ_MIN);
+                                 room_temp, approach_temp, pump_freq_setting_, new_freq, profile_.pump_freq_min);
                     }
                 }
             }
@@ -890,20 +898,20 @@ void HeaterUart::parse_rx_frame(const uint8_t *frame, size_t length) {
 
         // === SAFETY: Heat exchanger limits override thermostat ===
         // Combustion safety takes priority over comfort
-        if (hx_temp < HX_TEMP_LOW && new_freq < pump_freq_setting_) {
+        if (hx_temp < profile_.hx_temp_low && new_freq < pump_freq_setting_) {
             // HX too cold but thermostat wants to reduce - override, force increase
-            new_freq = pump_freq_setting_ + PUMP_FREQ_STEP;
+            new_freq = pump_freq_setting_ + profile_.pump_freq_step;
             ESP_LOGW(TAG, "HX soot safety override: HX %.0f°C < %.0f°C, forcing pump increase to %.1f Hz",
-                     hx_temp, HX_TEMP_LOW, new_freq);
-        } else if (hx_temp >= HX_TEMP_HIGH && new_freq > pump_freq_setting_) {
+                     hx_temp, profile_.hx_temp_low, new_freq);
+        } else if (hx_temp >= profile_.hx_temp_high && new_freq > pump_freq_setting_) {
             // HX too hot but thermostat wants to increase - override, force decrease
-            new_freq = pump_freq_setting_ - PUMP_FREQ_STEP;
+            new_freq = pump_freq_setting_ - profile_.pump_freq_step;
             ESP_LOGW(TAG, "HX safety override: HX %.0f°C >= %.0f°C, forcing pump decrease to %.1f Hz",
-                     hx_temp, HX_TEMP_HIGH, new_freq);
+                     hx_temp, profile_.hx_temp_high, new_freq);
         }
 
         // Apply new pump frequency within limits
-        new_freq = std::max(PUMP_FREQ_MIN, std::min(PUMP_FREQ_MAX, new_freq));
+        new_freq = std::max(profile_.pump_freq_min, std::min(profile_.pump_freq_max, new_freq));
         if (new_freq != pump_freq_setting_) {
             pump_freq_setting_ = new_freq;
             last_pump_adjust_time_ = now;
@@ -916,7 +924,7 @@ void HeaterUart::parse_rx_frame(const uint8_t *frame, size_t length) {
         // - Room temperature exceeds target + overshoot threshold
         if (heater_mode_ == HeaterMode::AUTO) {
             const float PUMP_EPSILON = 0.05f;  // Tolerance for pump frequency comparison
-            bool pump_at_min = (pump_freq_setting_ <= PUMP_FREQ_MIN + PUMP_EPSILON);
+            bool pump_at_min = (pump_freq_setting_ <= profile_.pump_freq_min + PUMP_EPSILON);
             bool temp_overshoot = (room_temp > target_temp + auto_shutdown_overshoot_);
 
             if (pump_at_min && temp_overshoot && !in_auto_shutdown_) {
@@ -941,7 +949,7 @@ void HeaterUart::parse_rx_frame(const uint8_t *frame, size_t length) {
                      room_temp, target_temp, auto_shutdown_hysteresis_);
             pending_on_off_command_ = CMD_START;
             heater_on_request_ = true;
-            pump_freq_setting_ = PUMP_FREQ_INITIAL;
+            pump_freq_setting_ = profile_.pump_freq_initial;
             last_pump_adjust_time_ = millis();
             in_auto_shutdown_ = false;
         }
@@ -966,7 +974,7 @@ void HeaterUart::start_priming() {
         return;
     }
 
-    ESP_LOGI(TAG, "Starting fuel priming - pump will run at 5.0 Hz for 60 seconds");
+    ESP_LOGI(TAG, "Starting fuel priming - pump will run at %.1f Hz for 60 seconds", profile_.pump_prime_freq);
     is_priming_ = true;
     priming_start_time_ = millis();
 

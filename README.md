@@ -48,6 +48,7 @@ In standalone mode, the ESP32 acts as the primary heater controller with full co
 - **Thermostat Operation**: Automatic temperature control with intelligent heating/cooling cycles
 - **Temperature Sensing**: Uses external temperature sensor (recommended) or heat exchanger temperature as fallback
 - **Voltage Support**: Supports both 12V and 24V heaters
+- **Multi-Model Support**: Selectable heater profile (see below) - pump/fan/HX limits adapt to the connected heater
 - **Safety Features**: Built-in cooldown sequences and heat exchanger temperature protection
 
 Enable standalone mode in your configuration:
@@ -67,6 +68,36 @@ In this mode, the ESP32 monitors the UART communication between an existing LCD 
 - **Passive Operation**: Suitable for adding smart home integration to existing setups
 
 This is the default mode when `standalone_mode` is not specified or set to `false`.
+
+## Heater Models
+
+The component supports multiple heaters via preset profiles. Every heater-specific tuning
+parameter (fuel pump Hz range, combustion fan RPM range, heat exchanger safety thresholds,
+glow plug power, temperature range, priming rate) comes from the selected profile - the
+control logic itself is heater-agnostic.
+
+The `heater_model` option is **required** and must name the physical heater connected:
+
+```yaml
+heater_uart:
+  heater_model: jeabong_8kw  # required
+```
+
+| `heater_model` | Heater | Pump freq (Hz) | Fan (RPM) | HX critical | Status |
+|---|---|---|---|---|---|
+| `jeabong_8kw` | Jeabong 8kW | 1.3 - 5.5 | 1450 - 4500 | 265 °C | Validated on the original reference hardware |
+| `vevor_2kw` | Vevor 2kW | 0.5 - 2.5 | 900 - 3000 | 205 °C | **PROVISIONAL** - values not yet bench-validated |
+
+> ⚠️ **`vevor_2kw` is provisional**: its profile values are initial estimates derived from
+> typical 2 kW heater behaviour. Validate and tune them during the interfacing phase before
+> using it for live control.
+
+To add another heater: add an entry to the `HeaterModel` enum in `heater_profile.h`, a preset
+factory function, and map it in `components/heater_uart/__init__.py` (plus this table). No
+control-logic changes required.
+
+> Note: the `type: pump` number entity's `min_value`/`max_value` in your YAML should match the
+> active profile's pump frequency range (jeabong_8kw: 1.3-5.5, vevor_2kw: 0.5-2.5).
 
 ## Auto Mode
 
@@ -133,6 +164,7 @@ uart:
 heater_uart:
   update_interval: 5s
   id: heater
+  heater_model: jeabong_8kw  # required - jeabong_8kw or vevor_2kw
   standalone_mode: true
   operating_voltage: "12V"  # or "24V" depending on your heater
   altitude: 750  # meters above sea level
@@ -236,8 +268,9 @@ button:
 ### Code Structure
 
 **Core Component:**
+- **`heater_profile.h`**: Heater model profiles - all heater-specific tuning (pump Hz, fan RPM, HX thresholds, glow power) in one place.
 - **`heater_uart.h`**: Header file defining the component.
-- **`heater_uart.cpp`**: Core logic for UART communication, frame parsing, thermostat control, and sensor management.
+- **`heater_uart.cpp`**: Core logic for UART communication, frame parsing, thermostat control, and sensor management. Reads all limits from the active profile.
 - **`__init__.py`**: Python module to integrate the component with ESPHome.
 
 **Sensor Entities:**

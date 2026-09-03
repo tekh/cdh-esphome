@@ -14,6 +14,7 @@ ESPHome external component for UART communication with diesel heaters. Parses 48
 .
 ├── components/heater_uart/    # Main component (C++ + Python)
 │   ├── heater_uart.cpp/h      # Core class: frame parsing, control logic
+│   ├── heater_profile.h       # ALL heater-specific tuning (pump/fan/HX limits per model)
 │   ├── __init__.py            # ESPHome schema registration
 │   ├── sensor.py              # 9 numeric sensors
 │   ├── text_sensor.py         # 2 text sensors (run_state, error_code)
@@ -42,6 +43,8 @@ ESPHome external component for UART communication with diesel heaters. Parses 48
 | TX frame construction | `heater_uart.cpp:build_tx_frame()` | Build 24-byte TX frame for heater |
 | Fuel priming | `heater_uart.cpp:start_priming()`/`stop_priming()` | 60s pump-only run for bleeding air |
 | State mappings | `heater_uart.cpp` static maps | `run_state_map`, `error_code_map` |
+| **Tune pump/fan/HX for a heater** | **`heater_profile.h`** | Per-model preset profiles, selected by `heater_model:` YAML key |
+| Add a heater model | `heater_profile.h` + `__init__.py` + README table | Enum entry, preset factory, `cv.enum` mapping |
 
 ## CODE MAP
 
@@ -58,6 +61,12 @@ ESPHome external component for UART communication with diesel heaters. Parses 48
 | `stop_priming()` | method | `heater_uart.cpp:980` | Stop fuel priming |
 
 ## CONVENTIONS
+
+**Heater Profiles:**
+- All heater-specific values (pump Hz, fan RPM, HX temps, glow power, temp range, priming rate) live ONLY in `heater_profile.h` presets
+- Control logic (`heater_uart.cpp`, entities) reads exclusively from `profile_.*` — never hardcoded values
+- `heater_model:` is REQUIRED in YAML — the profile is never implicit
+- `vevor_2kw` profile is PROVISIONAL until bench-validated (interfacing phase)
 
 **UART Protocol:**
 - LCD mode: 48-byte frames: TX (bytes 0-23) + RX (bytes 24-47)
@@ -92,9 +101,11 @@ heater_uart:
 
 ## ANTI-PATTERNS (THIS PROJECT)
 
+- **Never** hardcode pump/fan/HX limits in `heater_uart.cpp` or entities — put them in the `heater_profile.h` preset
 - **Never** change baud rate from 25000 (hardware fixed)
 - **Never** use separate TX/RX pins in standalone mode (half-duplex)
 - **Don't** suppress frame validation errors - indicates wiring/protocol issues
+- **Don't** run `vevor_2kw` profile for live control until its provisional values are bench-validated
 
 ## COMMANDS
 

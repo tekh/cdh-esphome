@@ -11,6 +11,8 @@
 #include <map>
 #include <string>
 
+#include "heater_profile.h"
+
 namespace esphome {
 namespace heater_uart {
 
@@ -39,9 +41,6 @@ static const uint8_t RUN_STATE_STOP_ACK = 6;
 static const uint8_t RUN_STATE_POST_GLOW = 7;
 static const uint8_t RUN_STATE_COOLDOWN = 8;
 
-static const uint8_t TEMP_MIN = 0;
-static const uint8_t TEMP_MAX = 30;
-
 // Operating voltage options
 static const uint8_t VOLTAGE_12V = 0x78;  // 120 = 12.0V
 static const uint8_t VOLTAGE_24V = 0xF0;  // 240 = 24.0V
@@ -50,29 +49,10 @@ static const uint8_t VOLTAGE_24V = 0xF0;  // 240 = 24.0V
 static const uint8_t DEFAULT_MIN_PUMP_FREQ = 0x0E;    // 1.4 Hz
 static const uint8_t DEFAULT_MAX_PUMP_FREQ = 0x32;    // 5.0 Hz
 
-// Pump frequency limits (0.1 Hz units)
-static const float PUMP_FREQ_MIN = 1.3f;   // 1.3 Hz minimum (8kW heater)
-static const float PUMP_FREQ_MAX = 5.5f;   // 5.5 Hz maximum (8kW heater)
-static const float PUMP_FREQ_STEP = 0.1f;  // Adjustment step size
-static const float PUMP_FREQ_INITIAL = 1.8f;  // Initial pump frequency for ignition
-
 // Pump adjustment timing - thermal mass means changes take time to show effect
 static const uint32_t PUMP_ADJUST_INTERVAL_MS = 5000;  // 5 seconds between adjustments
 
-// Heat exchanger temperature thresholds (°C)
-static const float HX_TEMP_LOW = 190.0f;      // Below this: increase pump (more fuel)
-static const float HX_TEMP_TARGET = 250.0f;   // Target temperature
-static const float HX_TEMP_HIGH = 255.0f;     // At/above this: decrease pump (less fuel)
-static const float HX_TEMP_CRITICAL = 265.0f; // Above this: emergency shutdown
-
-// Cooldown parameters
-static const uint16_t COOLDOWN_FAN_RPM = 4000;   // Fan speed during cooldown
-static const float COOLDOWN_TARGET_TEMP = 60.0f; // HX temp to reach before stopping fan
-static const uint16_t DEFAULT_MIN_FAN_RPM = 1450;
-static const uint16_t DEFAULT_MAX_FAN_RPM = 4500;
-static const uint16_t IGNITION_FAN_RPM = 2000;   // Fan speed during ignition (HX < 100°C)
-static const uint8_t DEFAULT_FAN_SENSOR = 0x01;       // SN-1
-static const uint8_t DEFAULT_GLOW_POWER = 0x05;
+// Altitude default (metres) - overridable via YAML
 //static const uint16_t DEFAULT_ALTITUDE = 0x0DAC;      // 3500m
 static const uint16_t DEFAULT_ALTITUDE = 0x02EE;      // 750m
 
@@ -94,6 +74,7 @@ class HeaterUart : public PollingComponent, public uart::UARTDevice {
   void set_mode_select(select::Select *sel) { this->mode_select_ = sel; }
 
   // Configuration setters
+  void set_heater_model(HeaterModel model) { this->profile_ = profile_for(model); }
   void set_standalone_mode(bool standalone) { this->standalone_mode_ = standalone; }
   void set_operating_voltage(uint8_t voltage) { this->operating_voltage_ = voltage; }
   void set_temperature_backoff(float offset) { this->temp_backoff_offset_ = offset; }
@@ -127,12 +108,20 @@ class HeaterUart : public PollingComponent, public uart::UARTDevice {
   HeaterMode get_heater_mode() const { return heater_mode_; }
   bool is_priming() const { return is_priming_; }
 
+  // Active profile accessors (used by the number entities for clamping)
+  const HeaterProfile &get_profile() const { return profile_; }
+  float get_pump_freq_min() const { return profile_.pump_freq_min; }
+  float get_pump_freq_max() const { return profile_.pump_freq_max; }
+  uint8_t get_temp_min() const { return profile_.temp_min; }
+  uint8_t get_temp_max() const { return profile_.temp_max; }
+
   // Fuel priming control
   void start_priming();
   void stop_priming();
 
  protected:
-  // Sensor storage
+  // Active heater profile (model-specific tuning parameters)
+  HeaterProfile profile_{profile_jeabong_8kw()};
   std::map<std::string, sensor::Sensor *> sensors_;
   std::map<std::string, text_sensor::TextSensor *> text_sensors_;
   std::map<std::string, binary_sensor::BinarySensor *> binary_sensors_;

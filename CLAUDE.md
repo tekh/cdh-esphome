@@ -12,11 +12,12 @@ This is a custom ESPHome component that provides UART communication with heaters
 
 The codebase follows ESPHome's external component architecture with C++ implementation and Python ESPHome integration:
 
-**C++ Core (`heater_uart.cpp/h`)**:
+**C++ Core (`heater_uart.cpp/h`) + `heater_profile.h`**:
 - `HeaterUart` class extends `PollingComponent` and `UARTDevice`
 - Frame parsing happens in `loop()` which reads UART data byte-by-byte
 - Parsed values are stored in member variables and published in `update()`
 - Uses dynamic sensor registration via `std::map` to store sensor/text_sensor/binary_sensor references by string keys
+- **`heater_profile.h`**: every heater-specific tuning parameter lives in a `HeaterProfile` struct (pump Hz range, fan RPM range, HX safety thresholds, glow power, fan sensor, temp range, priming rate). Preset profiles per model: `profile_jeabong_8kw()`, `profile_vevor_2kw()`. Selected by the required `heater_model:` YAML key → `set_heater_model()` → `profile_`. The control logic reads **only** from `profile_.*` (never hardcoded constants).
 
 **Python ESPHome Integration**:
 - `__init__.py`: Component configuration schema and registration
@@ -122,7 +123,12 @@ This will show UART frame parsing details and validation warnings.
 **Modifying Thermostat Logic**:
 - All thermostat logic is in `standalone_loop()` (heater_uart.cpp)
 - Pump frequency adjustment in `parse_rx_frame()` after RX processing
-- Safety limits: HX_TEMP_CRITICAL (265°C), ambient_heat_limit (default 26°C)
+- Safety limits: `profile_.hx_temp_critical`, `ambient_heat_limit` (config, default 26°C)
+
+**Tuning Values For A Specific Heater**:
+- Everything heater-specific lives in `heater_profile.h` — never hardcode pump/fan/HX limits in `heater_uart.cpp` or entities
+- To add a heater: 1) add `HeaterModel` enum entry in `heater_profile.h`, 2) add a preset factory function returning a `HeaterProfile`, 3) add the mapping in `components/heater_uart/__init__.py` (`cv.enum` + `HeaterModel.X = HeaterModel.enum_value("X")`), 4) update the README profile table
+- YAML is already `heater_model:` driven; the number entity clamps against the selected profile via `get_pump_freq_min/max()` / `get_temp_min/max()`
 
 **State Mappings**:
 - `run_state_map` and `error_code_map` in `heater_uart.cpp` provide human-readable descriptions

@@ -27,9 +27,9 @@ void HeaterPumpNumber::control(float value) {
         return;
     }
 
-    // Clamp the value to valid range
-    if (value < PUMP_FREQ_MIN) value = PUMP_FREQ_MIN;
-    if (value > PUMP_FREQ_MAX) value = PUMP_FREQ_MAX;
+    // Clamp the value to the active profile's pump frequency range
+    if (value < this->parent_->get_pump_freq_min()) value = this->parent_->get_pump_freq_min();
+    if (value > this->parent_->get_pump_freq_max()) value = this->parent_->get_pump_freq_max();
 
     ESP_LOGI(TAG, "Setting pump frequency to %.1f Hz", value);
     this->parent_->set_pump_frequency(value);
