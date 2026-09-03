@@ -985,6 +985,13 @@ void HeaterUart::thermostat_control() {
 
 // ==================== VEVOR (AA66/AA77, 4800 baud) PROTOCOL ====================
 
+// Air-density ratio sigma(h) = rho/rho0 (International Standard Atmosphere).
+// Fuel flow must scale by this factor at altitude or combustion runs rich
+// (soot, HX fouling). e.g. 762 m -> ~0.929 (-7.1 %).
+static float air_density_ratio(float altitude_m) {
+    return std::pow(1.0f - 0.0065f * altitude_m / 288.15f, 4.2561f);
+}
+
 void HeaterUart::vevor_loop() {
     uint32_t now = millis();
 
@@ -1222,13 +1229,6 @@ uint8_t HeaterUart::calc_checksum(const uint8_t *data, size_t length) {
         sum += data[i];
     }
     return static_cast<uint8_t>(sum & 0xFF);
-}
-
-// Air-density ratio sigma(h) = rho/rho0 (International Standard Atmosphere).
-// Fuel flow must scale by this factor at altitude or combustion runs rich
-// (soot, HX fouling). e.g. 762 m -> ~0.929 (-7.1 %).
-static float air_density_ratio(float altitude_m) {
-    return std::pow(1.0f - 0.0065f * altitude_m / 288.15f, 4.2561f);
 }
 
 
