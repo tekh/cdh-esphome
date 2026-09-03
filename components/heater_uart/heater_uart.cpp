@@ -1084,6 +1084,12 @@ void HeaterUart::send_vevor_frame() {
             command = 0x02;       // running status request
             requested_state = 0x08;
         }
+    } else if (run_state_value_ != RUN_STATE_OFF && run_state_value_ != RUN_STATE_COOLDOWN) {
+        // Heater has not yet entered OFF/cooldown: keep asserting STOP every second.
+        // (Live finding: the Vevor ignores a one-shot 0x06/0x05 and only stops on a
+        // persistent request until raw state becomes 0 (off) or 4 (stopping/cooling).)
+        command = 0x06;
+        requested_state = 0x05;
     } else {
         command = 0x02;           // idle status request
         requested_state = 0x02;
@@ -1147,7 +1153,9 @@ void HeaterUart::parse_vevor_rx_frame(const uint8_t *frame, size_t length) {
     on_off_value_ = (vs != 0);
 
     supply_voltage_value_ = frame[11] * 0.1f;                                          // V x10
-    glow_plug_current_value_ = frame[13];                                              // A
+    // byte 13 is NOT glow current on this unit (observed 0x74..0xA6 -> nonsensical
+    // 116-166 A). Undecoded field - keep the sensor clean instead of publishing garbage.
+    glow_plug_current_value_ = 0;
     heat_exchanger_temp_value_ = static_cast<int16_t>((frame[16] << 8) | frame[17]) * 0.1f;  // int16, x10
     pump_frequency_value_ = frame[23] * 0.1f;                                          // Hz x10
     fan_speed_value_ = (frame[28] << 8) | frame[29];                                   // RPM

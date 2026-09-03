@@ -67,7 +67,10 @@ follows zatakon's working ESPHome component (see References).
 
 Command/state selection (as implemented in `send_vevor_frame()`):
 - start: `cmd 0x06, state 0x06` (re-asserted every second while off and wanted on)
-- stop: `cmd 0x06, state 0x05`
+- stop: `cmd 0x06, state 0x05` — **must be re-asserted every second until the heater
+  enters state 0 (off) or 4 (stopping/cooling)**; a one-shot stop is ignored (live
+  finding: heater just drops to minimum power and keeps running). Once the state
+  machine moves, idle status (`0x02/0x02`) resumes.
 - running status: `cmd 0x02, state 0x08`
 - idle status: `cmd 0x02, state 0x02`
 
@@ -166,6 +169,41 @@ VEVOR RX: State=0 (Off / Standby) on=0, power=1, V=13.4, HX=.. C, pump=.. Hz, fa
 - Newer Vevor **Bluetooth/CO-sensor** models (BLE or "AA66 encrypted" packets).
 - **ZM-series** units (PWM 12 ms-bit protocol).
 - Any heater that does not answer `0xAA 0x66` status requests at 4800 baud.
+
+## Live observations (XMZ-D2 2kW, first controlled run, 2026-09-02)
+
+Confirmed field decodes (via controlled ignition through this component):
+
+| Field | Observed | Meaning confirmed |
+|---|---|---|
+| byte 5 (state) | `0x02` while heating up | raw 2 = ignited (zatakon mapping OK) |
+| byte 6 (power) | echoes our requested level (3 idle → 5 running) | level byte confirmed both directions |
+| byte 11 (voltage) | `0x77` = 119 → 11.9 V | V ×10, reports ~0 while off, live under load |
+| bytes 16-17 (HX) | `0x0104` = 260 → 26.0 °C | signed int16 ×10 confirmed |
+| bytes 20-21 | state-duration s; resets on state change, ticks 1/s | "state duration" interpretation |
+| bytes 28-29 (fan) | `0x05D2` = 1490 RPM | confirmed |
+| checksum | tracks changing bytes frame-to-frame | verified live |
+
+Open questions (this unit): bytes 12-14 (`22 A6 80`, middle byte drifts `0x74..0xA6`)
+are **not** glow current on this unit (would read as nonsensical 116-166 A; parser now
+keeps that sensor at 0); glow data lives elsewhere/undecoded. Tail bytes ~33-55 carry
+a second ticking counter and several near-constant temperature-looking readings
+(`23 12 21 17 01 1B`) — undecoded.
+
+### State-3 / full-power data (same first run)
+
+- Stable combustion (~4 min after ignition): **level 10 (max)** → pump **2.4-2.5 Hz**
+  (`0x18`/`0x19` — pump byte confirmed, it populated before state 3 too), fan
+  **~3500-4200 RPM** (0x0D97 / 0x1066), HX plateau **~145-160 °C** (0x05AE = 145.4),
+  supply **12.9-13.1 V** (0x82/0x83; 0x77 = 11.9 V during glow sag), err 0.
+- byte 4 = `0x01` while running (0 while off) - matches reference "all 1s when on".
+- Profile feedback: fan_rpm_max 3000 underestimates reality (~4200 observed, though
+  the heater self-manages fan on this protocol - value is informational); the
+  provisional hx_temp_low=145 collides with low-power desire (soot override forced
+  pump up while HX < 145 at the approach boundary) - candidate for lowering to
+  ~110-120 after an idle/low-power data point; HX critical 205 untouched.
+- Cooldown (mode Off): expect STOP frame (06/05), heater self-manages purge, our
+  cooldown-complete log fires when HX <= cooldown_target_temp (55 provisional).
 
 ## References
 
