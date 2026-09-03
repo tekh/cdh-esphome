@@ -231,6 +231,7 @@ class HeaterUart : public PollingComponent, public uart::UARTDevice {
   uint8_t vevor_rx_[64];
   int vevor_rx_index_ = 0;
   uint32_t vevor_rx_last_byte_ = 0;
+  uint8_t vevor_byte13_last_ = 0xFF;  // debounce for out-of-range byte 13 log
 
   // Mappings for error and run states
   static const std::map<int, std::string> run_state_map;

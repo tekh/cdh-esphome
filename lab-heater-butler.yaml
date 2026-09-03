@@ -79,7 +79,7 @@ heater_uart:
     operating_voltage: 12V  # or 24V depending on your heater
     temperature_sensor: dht22_temperature  # DHT22 for room temperature in standalone mode
     temperature_backoff: 0.5  # Start ramping down pump this many °C before target
-    altitude: 750  # metres above sea level (0-5000)
+    altitude: 762  # metres above sea level (0-5000) - confirmed real altitude; Vevor TX derates fuel by sigma(h), BDAP sends this in-frame
     auto_shutdown_overshoot: 0.5   # Trigger when room > target + 0.5°C at min pump AND pump has reached 1.3hz
     auto_shutdown_hysteresis: 1.5  # Restart when room < target - 1.5°C
     approach_threshold: 1.0        # Start reducing pump when within 1°C of target (gentler approach)

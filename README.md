@@ -113,6 +113,12 @@ The Vevor bus is **not** the classic BDAP protocol:
   signed int16 × 0.1 °C; pump frequency byte = Hz × 10; fan speed = RPM big-endian.
 - Supported heaters: Vevor XMZ-D2 2 kW (5 kW also reported). Newer Bluetooth/CO-sensor
   models and the ZM-series (PWM) units use **different** protocols — not supported here.
+- **Altitude/air density**: the Vevor frame has no altitude field (BDAP heaters
+  self-derate from the altitude bytes in their frame). This component therefore
+  derates fuel **open-loop** at the TX boundary: the requested power level is scaled
+  by the ISA air-density ratio σ(h) (`1 - 0.0065·h/288.15)^4.2561`), applied only at
+  stable combustion so ignition keeps its full rate. `altitude:` (m) is the source;
+  a BME280 baro sensor for live σ is the planned upgrade.
 - Fuel priming is **not supported** on the Vevor protocol (no documented pump-prime
   command); the Fuel Prime button logs a warning instead.
 

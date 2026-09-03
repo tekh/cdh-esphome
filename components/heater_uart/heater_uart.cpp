@@ -1109,6 +1109,15 @@ void HeaterUart::send_vevor_frame() {
     float ratio = (pump_freq_setting_ - profile_.pump_freq_min) /
                   (profile_.pump_freq_max - profile_.pump_freq_min);
     ratio = std::max(0.0f, std::min(1.0f, ratio));
+
+    // Altitude / air-density derating (Vevor frames have no altitude field - unlike
+    // BDAP where the heater self-derates - so the host must cut fuel itself).
+    // At altitude there is less air per stroke: uncorrected fuel runs rich (soot,
+    // HX fouling, overheating). Derate the level by the ISA density ratio sigma(h),
+    // applied only at stable combustion so ignition keeps its full requested rate.
+    if (run_state_value_ == RUN_STATE_RUNNING) {
+        ratio = std::max(0.0f, std::min(1.0f, ratio * air_density_ratio(altitude_)));
+    }
     frame[8] = 1 + static_cast<uint8_t>(ratio * 9.0f + 0.5f);
 
     frame[9] = requested_state;
@@ -1153,9 +1162,22 @@ void HeaterUart::parse_vevor_rx_frame(const uint8_t *frame, size_t length) {
     on_off_value_ = (vs != 0);
 
     supply_voltage_value_ = frame[11] * 0.1f;                                          // V x10
-    // byte 13 is NOT glow current on this unit (observed 0x74..0xA6 -> nonsensical
-    // 116-166 A). Undecoded field - keep the sensor clean instead of publishing garbage.
-    glow_plug_current_value_ = 0;
+    // byte 13: glow plug current on the reference Vevor (their capture: 0x06..0x0B =
+    // 6-11 A during states 2 & 4 - ignition warm-up and post-run glow - 0 otherwise,
+    // matching the RE table's 0-12 A guess). The XMZ-D2 reports 0x74..0xA6 (116-166)
+    // in the same slot even at idle - outside any plausible glow range - so publish
+    // only plausible values and log outliers for further RE.
+    uint8_t glow_raw = frame[13];
+    if (glow_raw <= 40) {
+        glow_plug_current_value_ = glow_raw;
+    } else {
+        if (glow_raw != vevor_byte13_last_) {
+            ESP_LOGD(TAG, "VEVOR: byte13 0x%02X outside glow-current range (state %d) - suppressed",
+                     glow_raw, vs);
+            vevor_byte13_last_ = glow_raw;
+        }
+        glow_plug_current_value_ = 0;
+    }
     heat_exchanger_temp_value_ = static_cast<int16_t>((frame[16] << 8) | frame[17]) * 0.1f;  // int16, x10
     pump_frequency_value_ = frame[23] * 0.1f;                                          // Hz x10
     fan_speed_value_ = (frame[28] << 8) | frame[29];                                   // RPM
@@ -1200,6 +1222,13 @@ uint8_t HeaterUart::calc_checksum(const uint8_t *data, size_t length) {
         sum += data[i];
     }
     return static_cast<uint8_t>(sum & 0xFF);
+}
+
+// Air-density ratio sigma(h) = rho/rho0 (International Standard Atmosphere).
+// Fuel flow must scale by this factor at altitude or combustion runs rich
+// (soot, HX fouling). e.g. 762 m -> ~0.929 (-7.1 %).
+static float air_density_ratio(float altitude_m) {
+    return std::pow(1.0f - 0.0065f * altitude_m / 288.15f, 4.2561f);
 }
 
 

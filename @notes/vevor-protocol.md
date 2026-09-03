@@ -190,6 +190,24 @@ keeps that sensor at 0); glow data lives elsewhere/undecoded. Tail bytes ~33-55 
 a second ticking counter and several near-constant temperature-looking readings
 (`23 12 21 17 01 1B`) — undecoded.
 
+### Protocol vocabulary is closed (reference capture, zatakon log_start_running_stop.txt)
+
+487 controller frames from a full start→running→stop session use exactly 6 combos:
+`02/02` idle, `02/08` running status, `06/06` start, `06/05` stop, power 1-10.
+**No prime command exists** - priming is not a protocol operation; the pump
+self-primes during every normal start (glow phase). The Fuel Prime button refusal
+is correct behaviour, not a gap. Glow plug voltage is **not reported** in the frame;
+glow plug **current** is byte 13 on the reference Vevor (their capture: 6-11 A
+(`0x06..0x0B`) during states 2 and 4 - ignition warm-up and post-run glow - 0
+otherwise; state-1 glow frames are scarce), but the XMZ-D2 puts 116-166 (`0x74..0xA6`)
+in that slot at all times, so the parser sanity-gates it (publishes ≤ 40 A, logs
+outliers). Bytes 8-9 = `03 FB` are generic "on" flags (0x00 when off).
+
+Additional reference confirmations: RX byte 14 **bit0 = cooling** (STOPPING frame
+shows `14:01`; the XMZ-D2 adds bit7 `0x80` as a status flag); the stop phase lights
+up a telemetry cluster (byte 13 = `08`, bytes 24-27 = `03 05 03 08`, byte 53 = `14`)
+of undecoded meaning. Reference unit frames: 0x33/56 bytes (XMZ-D2: 0x34/57).
+
 ### State-3 / full-power data (same first run)
 
 - Stable combustion (~4 min after ignition): **level 10 (max)** → pump **2.4-2.5 Hz**
@@ -204,6 +222,28 @@ a second ticking counter and several near-constant temperature-looking readings
   ~110-120 after an idle/low-power data point; HX critical 205 untouched.
 - Cooldown (mode Off): expect STOP frame (06/05), heater self-manages purge, our
   cooldown-complete log fires when HX <= cooldown_target_temp (55 provisional).
+
+## Altitude / air-density fueling
+
+The Vevor frame has **no altitude field** (BDAP heaters receive altitude in-frame and
+self-derate — see `build_tx_frame()` bytes 20-21; the Vevor must be derated by the host).
+Implemented (option A, research-recommended): open-loop derating at the TX boundary in
+`send_vevor_frame()` — the level sent is scaled by the ISA air-density ratio
+σ(h) = (1 − 0.0065·h/288.15)^4.2561, applied only at stable combustion
+(`RUN_STATE_RUNNING`), so ignition keeps its full requested rate.
+
+| Altitude | σ = ρ/ρ₀ | fuel derate |
+|---|---|---|
+| 500 m | 0.953 | −4.7 % |
+| 1000 m | 0.907 | −9.3 % |
+| 1500 m | 0.864 | −13.6 % |
+| 2000 m | 0.822 | −17.8 % |
+
+The bench is at **762 m** → σ ≈ 0.929 (−7.1 %), i.e. at level 10 the unit now commands
+level 9 (~7 % less fuel). Source of σ: the existing `altitude:` YAML (m); planned
+upgrade: a BME280 baro sensor feeding live σ = (P/101325)·(288.15/(T+273.15)) with
+`altitude_` as fallback. The HX soot-safety loop is deliberately left as a reactive
+backstop, not the primary mechanism (it would fight derating).
 
 ## References
 
