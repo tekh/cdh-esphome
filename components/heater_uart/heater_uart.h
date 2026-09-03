@@ -218,9 +218,24 @@ class HeaterUart : public PollingComponent, public uart::UARTDevice {
   void build_tx_frame(uint8_t *frame, uint8_t command);
   void send_standalone_frame();
 
+  // Shared thermostat/safety logic (BDAP and Vevor both call this after parsing)
+  void thermostat_control();
+
+  // Vevor protocol methods (used when profile_.protocol == VEVOR_UART)
+  void vevor_loop();
+  void send_vevor_frame();
+  void parse_vevor_rx_frame(const uint8_t *frame, size_t length);
+  uint8_t calc_checksum(const uint8_t *data, size_t length);
+
+  // Vevor RX state
+  uint8_t vevor_rx_[56];
+  int vevor_rx_index_ = 0;
+  uint32_t vevor_rx_last_byte_ = 0;
+
   // Mappings for error and run states
   static const std::map<int, std::string> run_state_map;
   static const std::map<int, std::string> error_code_map;
+  static const std::map<int, std::string> vevor_error_map;
 };
 
 }  // namespace heater_uart

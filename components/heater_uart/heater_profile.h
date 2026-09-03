@@ -12,6 +12,14 @@ enum class HeaterModel : uint8_t {
   VEVOR_2KW = 1,    // 2 kW Vevor heater (replacement hardware)
 };
 
+// Which link-layer protocol the heater speaks.
+//  - BDAP:      classic Chinese diesel heater bus, 0x76/0x16 24-byte frames, 25000 baud
+//  - VEVOR_UART: Vevor (XMZ-D2 etc.) bus, 0xAA/0x66/0x77 frames, 4800 baud, additive checksum
+enum class HeaterProtocol : uint8_t {
+  BDAP = 0,
+  VEVOR_UART = 1,
+};
+
 // All heater-specific tuning parameters live in one place so the component
 // can support different heaters without any code changes. Each model gets a
 // preset profile; refining a value only requires editing the profile, never
@@ -20,6 +28,9 @@ struct HeaterProfile {
   // --- identity ---
   const char *name;
   HeaterModel model;
+  HeaterProtocol protocol;  // UART framing/baud family used by this heater
+  uint32_t uart_baud_rate;  // required uart: baud_rate (must match YAML uart block)
+  bool uart_inverted;       // required pin inversion (Vevor bus is inverted logic)
 
   // --- protocol constants injected into the TX frame ---
   uint8_t fan_sensor;  // TX byte 12 (fan sensor type, e.g. 0x01 = SN-1)
@@ -61,6 +72,9 @@ inline HeaterProfile profile_jeabong_8kw() {
   HeaterProfile p{};
   p.name = "Jeabong 8kW";
   p.model = HeaterModel::JEABONG_8KW;
+  p.protocol = HeaterProtocol::BDAP;
+  p.uart_baud_rate = 25000;
+  p.uart_inverted = false;
   p.fan_sensor = 0x01;   // SN-1
   p.glow_power = 0x05;
   p.pump_freq_min = 1.3f;
@@ -95,6 +109,11 @@ inline HeaterProfile profile_vevor_2kw() {
   HeaterProfile p{};
   p.name = "Vevor 2kW";
   p.model = HeaterModel::VEVOR_2KW;
+  // Vevor bus (per zatakon/esphome-vevor-heater RE): 4800 baud, AA66/AA77 frames,
+  // inverted logic levels. Requires uart: baud_rate 4800 + inverted pins in YAML.
+  p.protocol = HeaterProtocol::VEVOR_UART;
+  p.uart_baud_rate = 4800;
+  p.uart_inverted = true;
   p.fan_sensor = 0x01;   // SN-1 (verify on bench)
   p.glow_power = 0x05;   // (verify glow plug rating)
   // 2 kW: ~0.2-0.3 L/h fuel => dosing pump runs well below an 8 kW's range

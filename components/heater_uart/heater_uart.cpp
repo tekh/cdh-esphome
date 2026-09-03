@@ -58,6 +58,14 @@ const std::map<int, std::string> HeaterUart::error_code_map = {
     {9, "Fire Extinguished"}, {10, "Temperature Sensor Failure"}
 };
 
+// Vevor error codes (from the zatakon/vevor_heater_control reverse engineering)
+const std::map<int, std::string> HeaterUart::vevor_error_map = {
+    {0x00, "No Error"}, {0x01, "E10 - Startup Failure"}, {0x02, "E08 - Check Fuel Level"},
+    {0x03, "E01 - Supply Voltage Overrun"}, {0x04, "E04 - ?"}, {0x05, "E05 - ?"},
+    {0x06, "E04 - Fuel Pump Failure"}, {0x07, "E06 - Fan Failure"},
+    {0x08, "E03 - Check Ignition"}, {0x09, "E05 - Overheat"}
+};
+
 void HeaterUart::setup() {
     ESP_LOGCONFIG(TAG, "Setting up Heater UART...");
     memset(last_tx_frame_, 0, sizeof(last_tx_frame_));
@@ -76,6 +84,10 @@ void HeaterUart::setup() {
                  profile_.name, profile_.pump_freq_min, profile_.pump_freq_max,
                  profile_.fan_rpm_min, profile_.fan_rpm_max, profile_.hx_temp_critical,
                  profile_.temp_min, profile_.temp_max);
+        ESP_LOGI(TAG, "Protocol: %s @ %u baud (inverted: %s)",
+                 profile_.protocol == HeaterProtocol::VEVOR_UART ? "VEVOR-UART (0xAA/0x66)"
+                                                                 : "BDAP (0x76/0x16)",
+                 (unsigned) profile_.uart_baud_rate, profile_.uart_inverted ? "yes" : "no");
         ESP_LOGI(TAG, "Operating voltage: %s", operating_voltage_ == VOLTAGE_12V ? "12V" : "24V");
         ESP_LOGI(TAG, "Altitude: %d m", altitude_);
         ESP_LOGI(TAG, "Initial desired temperature: %.1f°C", desired_temp_setting_);
@@ -451,6 +463,12 @@ uint16_t HeaterUart::calc_crc16(const uint8_t *data, size_t length) {
 void HeaterUart::standalone_loop() {
     uint32_t now = millis();
 
+    // Route to the protocol-specific loop (Vevor has its own framing/cadence)
+    if (profile_.protocol == HeaterProtocol::VEVOR_UART) {
+        vevor_loop();
+        return;
+    }
+
         // === AMBIENT HEAT LIMIT CHECK (HEAT Mode ONLY) ===
 	if (heater_mode_ == HeaterMode::ON && current_temperature_value_ > ambient_heat_limit_) {
             ESP_LOGW(TAG, "Ambient Limit Exceeded in HEAT mode: Room %.1f°C > Limit %.1f°C. Forcing shutdown.",
@@ -751,6 +769,15 @@ void HeaterUart::parse_rx_frame(const uint8_t *frame, size_t length) {
         return;  // Skip thermostat logic during cooldown
     }
 
+    // Standby check, thermostat, safety limits and auto-restart (shared with Vevor protocol)
+    thermostat_control();
+}
+
+void HeaterUart::thermostat_control() {
+    float hx_temp = heat_exchanger_temp_value_;
+    float room_temp = current_temperature_value_;  // external sensor, refreshed at TX time
+    float target_temp = static_cast<float>(desired_temp_setting_);
+
     // === STANDBY CHECK (AUTO mode) ===
     // If in standby, check if temperature has dropped enough to start
     if (in_standby_ && heater_mode_ == HeaterMode::AUTO && standalone_mode_) {
@@ -956,6 +983,209 @@ void HeaterUart::parse_rx_frame(const uint8_t *frame, size_t length) {
     }
 }
 
+// ==================== VEVOR (AA66/AA77, 4800 baud) PROTOCOL ====================
+
+void HeaterUart::vevor_loop() {
+    uint32_t now = millis();
+
+    // === AMBIENT HEAT LIMIT CHECK (HEAT Mode ONLY) ===
+    if (heater_mode_ == HeaterMode::ON && current_temperature_value_ > ambient_heat_limit_) {
+        ESP_LOGW(TAG, "Ambient Limit Exceeded in HEAT mode: Room %.1f°C > Limit %.1f°C. Forcing shutdown.",
+                 current_temperature_value_, ambient_heat_limit_);
+        pending_on_off_command_ = CMD_STOP;
+        in_cooldown_ = true;  // Start cooldown sequence immediately
+    }
+
+    // Continuously collect frames. Resync on 0xAA; ignore our own echo (id 0x66).
+    while (available()) {
+        uint8_t byte = read();
+        vevor_rx_last_byte_ = now;
+        if (vevor_rx_index_ == 0) {
+            if (byte == 0xAA) {
+                vevor_rx_[vevor_rx_index_++] = byte;
+            }
+            // else: discard byte, keep hunting for the start marker
+        } else {
+            vevor_rx_[vevor_rx_index_++] = byte;
+            if (vevor_rx_index_ >= 4) {
+                // Frame length is signalled by byte 3 (0x33 = 56-byte heater frame,
+                // 0x0B = 16-byte controller frame / echo)
+                uint8_t expected = (vevor_rx_[3] == 0x33) ? 56 : 16;
+                if (vevor_rx_index_ >= expected) {
+                    uint8_t rx[56];
+                    memcpy(rx, vevor_rx_, expected);
+                    vevor_rx_index_ = 0;
+                    if (rx[1] == 0x66) {
+                        ESP_LOGD(TAG, "VEVOR: own echo ignored (controller id 0x66)");
+                        continue;
+                    }
+                    parse_vevor_rx_frame(rx, expected);
+                } else if (vevor_rx_index_ > expected + 8) {
+                    ESP_LOGW(TAG, "VEVOR: frame too long (%d bytes), resyncing", vevor_rx_index_);
+                    vevor_rx_index_ = 0;
+                }
+            }
+        }
+    }
+
+    // Partial frame timeout - resync
+    if (vevor_rx_index_ > 0 && (now - vevor_rx_last_byte_) > 300) {
+        ESP_LOGW(TAG, "VEVOR: partial frame timeout (%d bytes), resyncing", vevor_rx_index_);
+        vevor_rx_index_ = 0;
+    }
+
+    // Priming timeout (parity with BDAP; priming itself is unsupported on Vevor)
+    if (is_priming_ && (now - priming_start_time_ >= 60000)) {
+        ESP_LOGI(TAG, "Fuel priming timeout reached (60 seconds) - stopping priming");
+        stop_priming();
+    }
+
+    // 1 Hz controller cadence - controller always talks first, heater answers
+    if (now - last_tx_time_ >= STANDALONE_TX_INTERVAL_MS) {
+        send_vevor_frame();
+        last_tx_time_ = now;
+    }
+}
+
+void HeaterUart::send_vevor_frame() {
+    uint8_t frame[16];
+
+    // Refresh room temperature from the external sensor (same as BDAP TX)
+    if (external_temp_sensor_ != nullptr && !std::isnan(external_temp_sensor_->state)) {
+        current_temperature_value_ = external_temp_sensor_->state;
+    }
+
+    // Command / requested-state selection (mirrors the zatakon state machine)
+    uint8_t command;
+    uint8_t requested_state;
+    if (pending_on_off_command_ == CMD_START) {
+        command = 0x06;           // start
+        requested_state = 0x06;
+        pending_on_off_command_ = CMD_NO_CHANGE;
+        ESP_LOGI(TAG, "VEVOR: sending START (power %d)", 1 + static_cast<uint8_t>(
+                    std::max(0.0f, std::min(1.0f, (pump_freq_setting_ - profile_.pump_freq_min) /
+                    (profile_.pump_freq_max - profile_.pump_freq_min))) * 9.0f + 0.5f));
+    } else if (pending_on_off_command_ == CMD_STOP) {
+        command = 0x06;           // stop
+        requested_state = 0x05;
+        pending_on_off_command_ = CMD_NO_CHANGE;
+        ESP_LOGI(TAG, "VEVOR: sending STOP");
+    } else if (heater_on_request_) {
+        if (run_state_value_ == RUN_STATE_OFF) {
+            command = 0x06;       // keep asserting start until the heater comes up
+            requested_state = 0x06;
+        } else {
+            command = 0x02;       // running status request
+            requested_state = 0x08;
+        }
+    } else {
+        command = 0x02;           // idle status request
+        requested_state = 0x02;
+    }
+
+    frame[0] = 0xAA;              // start marker
+    frame[1] = 0x66;              // controller id
+    frame[2] = command;
+    frame[3] = 0x0B;              // controller frame length field
+    frame[4] = 0x00;
+    frame[5] = 0x00;
+    frame[6] = 0x00;
+    frame[7] = 0x00;
+
+    // Power level 1-10, derived from the internal pump-frequency setting (Hz domain).
+    // The shared thermostat logic adjusts pump_freq_setting_; we convert at the boundary.
+    float ratio = (pump_freq_setting_ - profile_.pump_freq_min) /
+                  (profile_.pump_freq_max - profile_.pump_freq_min);
+    ratio = std::max(0.0f, std::min(1.0f, ratio));
+    frame[8] = 1 + static_cast<uint8_t>(ratio * 9.0f + 0.5f);
+
+    frame[9] = requested_state;
+    frame[10] = 0x00;
+    frame[11] = 0x00;
+    frame[12] = 0x00;
+    frame[13] = 0x00;
+    frame[14] = 0x00;
+    frame[15] = calc_checksum(frame, 16);   // additive checksum, last byte
+
+    ESP_LOGD(TAG, "VEVOR TX: %02X %02X %02X %02X %02X %02X %02X %02X | %02X %02X %02X %02X %02X %02X %02X %02X",
+             frame[0], frame[1], frame[2], frame[3], frame[4], frame[5], frame[6], frame[7],
+             frame[8], frame[9], frame[10], frame[11], frame[12], frame[13], frame[14], frame[15]);
+    write_array(frame, 16);
+    flush();
+}
+
+void HeaterUart::parse_vevor_rx_frame(const uint8_t *frame, size_t length) {
+    if (length != 56) {
+        ESP_LOGW(TAG, "VEVOR: unexpected frame length %d (expected 56)", (int) length);
+        return;
+    }
+
+    // Additive checksum over bytes 2..len-2. Log mismatch but keep parsing - the bus
+    // is noisy and the reference implementations accept bad checksums too.
+    uint8_t received_csum = frame[length - 1];
+    uint8_t calculated_csum = calc_checksum(frame, length);
+    if (received_csum != calculated_csum) {
+        ESP_LOGD(TAG, "VEVOR: checksum mismatch: rx 0x%02X, calc 0x%02X", received_csum, calculated_csum);
+    }
+
+    // Map Vevor state (byte 5) onto the shared BDAP run-state enumeration
+    uint8_t vs = frame[5];
+    switch (vs) {
+        case 0:  run_state_value_ = RUN_STATE_OFF; break;
+        case 1:  run_state_value_ = RUN_STATE_GLOW_PREHEAT; break;
+        case 2:  run_state_value_ = RUN_STATE_IGNITED; break;
+        case 3:  run_state_value_ = RUN_STATE_RUNNING; break;
+        case 4:  run_state_value_ = RUN_STATE_COOLDOWN; break;
+        default: run_state_value_ = RUN_STATE_OFF; break;
+    }
+    on_off_value_ = (vs != 0);
+
+    supply_voltage_value_ = frame[11] * 0.1f;                                          // V x10
+    glow_plug_current_value_ = frame[13];                                              // A
+    heat_exchanger_temp_value_ = static_cast<int16_t>((frame[16] << 8) | frame[17]) * 0.1f;  // int16, x10
+    pump_frequency_value_ = frame[23] * 0.1f;                                          // Hz x10
+    fan_speed_value_ = (frame[28] << 8) | frame[29];                                   // RPM
+    error_code_value_ = frame[7];
+
+    desired_temperature_value_ = desired_temp_setting_;
+    run_state_description_ = run_state_map.count(run_state_value_)
+                                ? run_state_map.at(run_state_value_)
+                                : "Unknown Run State";
+    error_code_description_ = vevor_error_map.count(error_code_value_)
+                                ? vevor_error_map.at(error_code_value_)
+                                : "Unknown Error Code";
+
+    float hx_temp = heat_exchanger_temp_value_;
+    float room_temp = current_temperature_value_;
+    float target_temp = static_cast<float>(desired_temp_setting_);
+
+    ESP_LOGD(TAG, "VEVOR RX: State=%d (%s) on=%d, power=%d, V=%.1f, HX=%.0f C, pump=%.1f Hz, fan=%d RPM, err=%d%s",
+             run_state_value_, run_state_description_.c_str(), on_off_value_, frame[6],
+             supply_voltage_value_, hx_temp, pump_frequency_value_, fan_speed_value_,
+             error_code_value_, (frame[14] != 0) ? " [COOLING]" : "");
+
+    // Cooldown monitoring (HX-based, same behaviour as BDAP)
+    if (in_cooldown_) {
+        if (hx_temp <= profile_.cooldown_target_temp) {
+            ESP_LOGI(TAG, "VEVOR: cooldown complete: HX %.0f C <= %.0f C", hx_temp, profile_.cooldown_target_temp);
+            in_cooldown_ = false;
+        }
+        return;  // skip thermostat logic during cooldown
+    }
+
+    // Shared thermostat / safety / auto-restart logic (Hz domain; TX converts level back)
+    thermostat_control();
+}
+
+uint8_t HeaterUart::calc_checksum(const uint8_t *data, size_t length) {
+    uint32_t sum = 0;
+    for (size_t i = 2; i < length - 1; ++i) {
+        sum += data[i];
+    }
+    return static_cast<uint8_t>(sum & 0xFF);
+}
+
+
 void HeaterUart::start_priming() {
     // Only allow priming when heater is OFF
     if (on_off_value_ || heater_on_request_) {
@@ -965,6 +1195,12 @@ void HeaterUart::start_priming() {
 
     if (!standalone_mode_) {
         ESP_LOGW(TAG, "Fuel priming is only available in standalone mode");
+        return;
+    }
+
+    if (profile_.protocol != HeaterProtocol::BDAP) {
+        // No documented pump-prime command on the Vevor bus - refuse rather than guess
+        ESP_LOGW(TAG, "Fuel priming is not supported on this heater's protocol");
         return;
     }
 

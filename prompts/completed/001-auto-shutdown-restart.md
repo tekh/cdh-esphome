@@ -24,7 +24,7 @@ Key files to modify:
 - `./components/heater_uart/binary_sensor.py` - Binary sensor platform
 - `./components/heater_uart/number.py` - Number platform (for temperature control)
 
-Read the CLAUDE.md file for project conventions and structure.
+Read AGENTS.md for project conventions and structure.
 
 Current thermostat logic is in `parse_rx_frame()` around line 652-742 of heater_uart.cpp.
 

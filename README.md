@@ -83,18 +83,40 @@ heater_uart:
   heater_model: jeabong_8kw  # required
 ```
 
-| `heater_model` | Heater | Pump freq (Hz) | Fan (RPM) | HX critical | Status |
-|---|---|---|---|---|---|
-| `jeabong_8kw` | Jeabong 8kW | 1.3 - 5.5 | 1450 - 4500 | 265 °C | Validated on the original reference hardware |
-| `vevor_2kw` | Vevor 2kW | 0.5 - 2.5 | 900 - 3000 | 205 °C | **PROVISIONAL** - values not yet bench-validated |
+| `heater_model` | Heater | Protocol | Baud | Pump freq (Hz) | Fan (RPM) | HX critical | Status |
+|---|---|---|---|---|---|---|---|
+| `jeabong_8kw` | Jeabong 8kW | BDAP `0x76/0x16` | 25000 | 1.3 - 5.5 | 1450 - 4500 | 265 °C | Validated on the original reference hardware |
+| `vevor_2kw` | Vevor 2kW (XMZ-D2) | Vevor `0xAA/0x66/0x77` | 4800 | 0.5 - 2.5 | 900 - 3000 | 205 °C | **PROVISIONAL** - comms layer written, bench-verification in progress |
 
 > ⚠️ **`vevor_2kw` is provisional**: its profile values are initial estimates derived from
 > typical 2 kW heater behaviour. Validate and tune them during the interfacing phase before
 > using it for live control.
 
-To add another heater: add an entry to the `HeaterModel` enum in `heater_profile.h`, a preset
-factory function, and map it in `components/heater_uart/__init__.py` (plus this table). No
-control-logic changes required.
+### Vevor protocol notes (interfacing phase)
+
+The Vevor bus is **not** the classic BDAP protocol:
+
+- **Baud 4800**, half-duplex, controller talks first at 1 Hz, heater answers with a
+  56-byte frame (`AA 77 ... 0x33 ...`, additive checksum = sum of bytes 2..len-2 mod 256).
+- Controller frames are 16 bytes: `AA 66 <cmd> 0x0B ... <power 1-10> <state> ... <csum>`.
+  Power is a **level 1-10**, not pump Hz — the component converts pump Hz ↔ level at the
+  protocol boundary, so all thermostat logic stays in the Hz domain.
+- The bus is open-drain, idle ≈ 4-5 V, **inverted logic**: the reference interface is a
+  transistor pair (RX transistor to 3.3 V rail!) plus a pull-up to 5 V, with
+  `inverted: true` on both UART pins. **Do not connect ESP32 GPIOs directly to the bus.**
+  If your bench uses the direct 1k-ohm tap from the 8 kW era, test with `inverted: false`
+  first, then `true`, then build the transistor stage if the line is still silent.
+- Implemented per the zatakon reverse engineering
+  (`github.com/zatakon/esphome-vevor-heater`): states 0=off, 1=glow, 2=ignited,
+  3=stable, 4=stopping/cooling; errors `E01/E03/E04/E05/E06/E08/E10`; HX temperature is a
+  signed int16 × 0.1 °C; pump frequency byte = Hz × 10; fan speed = RPM big-endian.
+- Supported heaters: Vevor XMZ-D2 2 kW (5 kW also reported). Newer Bluetooth/CO-sensor
+  models and the ZM-series (PWM) units use **different** protocols — not supported here.
+- Fuel priming is **not supported** on the Vevor protocol (no documented pump-prime
+  command); the Fuel Prime button logs a warning instead.
+
+> 📄 Full protocol byte-layout, hardware notes and the bench/test procedure live in
+> [`@notes/vevor-protocol.md`](@notes/vevor-protocol.md).
 
 > Note: the `type: pump` number entity's `min_value`/`max_value` in your YAML should match the
 > active profile's pump frequency range (jeabong_8kw: 1.3-5.5, vevor_2kw: 0.5-2.5).

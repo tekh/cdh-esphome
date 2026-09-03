@@ -89,23 +89,50 @@ ESPHome external component for UART communication with diesel heaters. Parses 48
 
 ```yaml
 uart:
-  baud_rate: 25000
+  baud_rate: 4800  # BDAP (jeabong_8kw) = 25000 | Vevor (vevor_2kw) = 4800, inverted pins
   tx_pin: GPIO17  # Same pin for half-duplex
   rx_pin: GPIO17
   rx_buffer_size: 512
 
 heater_uart:
+  heater_model: jeabong_8kw  # or vevor_2kw - required, selects the profile + protocol
   standalone_mode: true  # For thermostat control
   operating_voltage: "12V"  # or "24V"
 ```
 
+> Baud/pin inversion must match the selected profile (`profile_.uart_baud_rate` /
+> `profile_.uart_inverted`); the YAML `uart:` block cannot be set from the component.
+
 ## ANTI-PATTERNS (THIS PROJECT)
 
 - **Never** hardcode pump/fan/HX limits in `heater_uart.cpp` or entities — put them in the `heater_profile.h` preset
-- **Never** change baud rate from 25000 (hardware fixed)
+- **Never** change baud rate from what the selected profile requires (25000 BDAP / 4800 Vevor)
 - **Never** use separate TX/RX pins in standalone mode (half-duplex)
 - **Don't** suppress frame validation errors - indicates wiring/protocol issues
 - **Don't** run `vevor_2kw` profile for live control until its provisional values are bench-validated
+
+## COMMON MODIFICATIONS
+
+**Adding New Sensors:**
+1. Add the sensor definition to `sensor.py` (name, unit, icon)
+2. Add the parsed-value member variable in `heater_uart.h`
+3. Parse it in `parse_rx_frame()` (BDAP) and/or `parse_vevor_rx_frame()` (Vevor)
+4. Publish it in `update()`
+
+**Adding New Control Entities:**
+1. Create a Python schema file (`number.py`/`select.py`/`button.py` etc.)
+2. Create the C++ entity class following the `HeaterNumber` pattern (`.h`/`.cpp`)
+3. Add a setter in `heater_uart.h` and register the entity schema in the platform module
+
+**Modifying Frame Parsing:**
+- BDAP: `parse_frame()`/`parse_rx_frame()` - 0x76/0x16 24-byte frames @ 25000 baud
+- Vevor: `parse_vevor_rx_frame()` - 0xAA/0x77 56-byte frames @ 4800 baud (additive checksum)
+- Multi-byte values are big-endian: `(high << 8) | low`. Vevor HX temp is a **signed** int16 × 0.1 °C
+- Vevor link-layer details: `@notes/vevor-protocol.md`
+
+**Modifying Thermostat/Safety Logic:**
+- Everything lives in `thermostat_control()` (shared by both protocols) and is driven
+  by the profile; pump Hz ↔ power level conversion happens only at the Vevor TX boundary
 
 ## COMMANDS
 
