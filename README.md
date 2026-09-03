@@ -97,7 +97,8 @@ heater_uart:
 The Vevor bus is **not** the classic BDAP protocol:
 
 - **Baud 4800**, half-duplex, controller talks first at 1 Hz, heater answers with a
-  56-byte frame (`AA 77 ... 0x33 ...`, additive checksum = sum of bytes 2..len-2 mod 256).
+  56/57-byte frame (`AA 77 ... 0x33/0x34 ...`; length byte + 5, additive checksum =
+  sum of bytes 2..len-2 mod 256 — verified live on the XMZ-D2 2 kW).
 - Controller frames are 16 bytes: `AA 66 <cmd> 0x0B ... <power 1-10> <state> ... <csum>`.
   Power is a **level 1-10**, not pump Hz — the component converts pump Hz ↔ level at the
   protocol boundary, so all thermostat logic stays in the Hz domain.

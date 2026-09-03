@@ -16,7 +16,7 @@ response from heater` — were caused by a **protocol mismatch**, not by wiring:
 | Start / IDs | `0x76 0x16` | `0xAA 0x66` (controller) / `0xAA 0x77` (heater) |
 | Checksum | CRC-16/MODBUS (bytes 0-21) | **additive sum of bytes 2..len-2, mod 256** |
 | Control | pump Hz + fan RPM | **power level 1-10** |
-| Response | 24 bytes | **56 bytes** (byte 3 = `0x33`) |
+| Response | 24 bytes | **56 or 57 bytes** (byte 3 `0x33` → 56, `0x34` → 57 — the XMZ-D2 2 kW unit uses `0x34`) |
 | Device-ID echoes | none | controller echoes its own frame (filter on `0x66`) |
 
 Protocol reverse-engineered independently by three parties; our implementation
@@ -44,11 +44,12 @@ follows zatakon's working ESPHome component (see References).
   answers a valid frame (it stays silent otherwise — never announces).
 - Cadence: 1 Hz while controlling; slower idle poll is acceptable when off
   (reference lib polls every 60 s when idle; our component currently keeps 1 Hz).
-- Frames start at `0xAA`. Byte 3 carries a length field: `0x0B` = controller frame
-  (16 bytes), `0x33` = heater frame (56 bytes). Frame end = checksum byte.
-- Checksum: `sum(frame[2 .. len-2]) & 0xFF` in the last byte. The reference
-  implementations accept frames even when the checksum is bad (noisy bus) — we log
-  mismatches rather than dropping frames.
+- Frames start at `0xAA`. Byte 3 carries a length field: frame length = **byte 3 + 5**
+  (observed: `0x0B` → 16-byte controller frame, `0x33` → 56-byte heater frame,
+  `0x34` → 57-byte heater frame). Frame end = checksum byte.
+- Checksum: `sum(frame[2 .. len-2]) & 0xFF` in the last byte. **Verified live** against
+  the XMZ-D2 2 kW: `sum(bytes 2..55) = 0x58` matches the received checksum byte.
+  Mismatches are logged, not fatal (noisy bus, same as the reference implementation).
 
 ### Controller → heater (16 bytes)
 
@@ -117,7 +118,7 @@ sensor. Effectively: level 1 ≈ 0.5 Hz and level 10 ≈ 2.5 Hz on the 2 kW prof
 | `heater_uart.cpp` | `standalone_loop()` | dispatches to `vevor_loop()` when profile protocol is VEVOR_UART |
 | `heater_uart.cpp` | `vevor_loop()` | RX collection (sync `0xAA`, length from byte 3, echo `0x66` filtered), 1 Hz TX cadence, ambient-limit check |
 | `heater_uart.cpp` | `send_vevor_frame()` | 16-byte `AA 66` frame; start/stop/status state machine; Hz→level |
-| `heater_uart.cpp` | `parse_vevor_rx_frame()` | 56-byte `AA 77` parse; state remap to BDAP enum; voltage/HX/pump/fan/errors; cooldown; then `thermostat_control()` |
+| `heater_uart.cpp` | `parse_vevor_rx_frame()` | `AA 77` frame parse (56/57 bytes, length byte + 5); state remap to BDAP enum; voltage/HX/pump/fan/errors; cooldown; then `thermostat_control()` |
 | `heater_uart.cpp` | `thermostat_control()` | shared thermostat/safety/auto-restart (BDAP path unchanged, moved verbatim) |
 | `heater_uart.cpp` | `calc_checksum()` | additive checksum |
 | `heater_uart.cpp` | `vevor_error_map` | byte 7 → E01..E10 strings |

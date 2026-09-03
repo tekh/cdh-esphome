@@ -227,8 +227,8 @@ class HeaterUart : public PollingComponent, public uart::UARTDevice {
   void parse_vevor_rx_frame(const uint8_t *frame, size_t length);
   uint8_t calc_checksum(const uint8_t *data, size_t length);
 
-  // Vevor RX state
-  uint8_t vevor_rx_[56];
+  // Vevor RX state (frame up to 60 bytes: length field + 5; e.g. 0x34 -> 57)
+  uint8_t vevor_rx_[64];
   int vevor_rx_index_ = 0;
   uint32_t vevor_rx_last_byte_ = 0;
 

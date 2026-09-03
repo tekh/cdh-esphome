@@ -1008,11 +1008,17 @@ void HeaterUart::vevor_loop() {
         } else {
             vevor_rx_[vevor_rx_index_++] = byte;
             if (vevor_rx_index_ >= 4) {
-                // Frame length is signalled by byte 3 (0x33 = 56-byte heater frame,
-                // 0x0B = 16-byte controller frame / echo)
-                uint8_t expected = (vevor_rx_[3] == 0x33) ? 56 : 16;
+                // Frame length = length-field byte + 5 (observed: 0x0B->16 controller,
+                // 0x33->56 and 0x34->57 heater frames)
+                uint8_t expected = vevor_rx_[3] + 5;
+                if (expected < 16 || expected > 60) {
+                    // Garbage length field - resync instead of overflowing the buffer
+                    ESP_LOGW(TAG, "VEVOR: implausible length field 0x%02X, resyncing", vevor_rx_[3]);
+                    vevor_rx_index_ = 0;
+                    continue;
+                }
                 if (vevor_rx_index_ >= expected) {
-                    uint8_t rx[56];
+                    uint8_t rx[64];
                     memcpy(rx, vevor_rx_, expected);
                     vevor_rx_index_ = 0;
                     if (rx[1] == 0x66) {
@@ -1115,8 +1121,8 @@ void HeaterUart::send_vevor_frame() {
 }
 
 void HeaterUart::parse_vevor_rx_frame(const uint8_t *frame, size_t length) {
-    if (length != 56) {
-        ESP_LOGW(TAG, "VEVOR: unexpected frame length %d (expected 56)", (int) length);
+    if (length < 52 || length > 60) {
+        ESP_LOGW(TAG, "VEVOR: unexpected frame length %d (expected 52-60)", (int) length);
         return;
     }
 
@@ -1159,10 +1165,13 @@ void HeaterUart::parse_vevor_rx_frame(const uint8_t *frame, size_t length) {
     float room_temp = current_temperature_value_;
     float target_temp = static_cast<float>(desired_temp_setting_);
 
-    ESP_LOGD(TAG, "VEVOR RX: State=%d (%s) on=%d, power=%d, V=%.1f, HX=%.0f C, pump=%.1f Hz, fan=%d RPM, err=%d%s",
+    // byte 14: status flags. bit0 = cooling (per reference); this unit sends 0x80
+    // even while idle (unknown meaning) - log the raw byte for future reverse
+    // engineering rather than guessing.
+    ESP_LOGD(TAG, "VEVOR RX: State=%d (%s) on=%d, power=%d, V=%.1f, HX=%.0f C, pump=%.1f Hz, fan=%d RPM, err=%d, status=0x%02X%s",
              run_state_value_, run_state_description_.c_str(), on_off_value_, frame[6],
              supply_voltage_value_, hx_temp, pump_frequency_value_, fan_speed_value_,
-             error_code_value_, (frame[14] != 0) ? " [COOLING]" : "");
+             error_code_value_, frame[14], (frame[14] & 0x01) ? " [COOLING]" : "");
 
     // Cooldown monitoring (HX-based, same behaviour as BDAP)
     if (in_cooldown_) {
