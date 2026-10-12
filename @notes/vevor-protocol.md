@@ -417,8 +417,10 @@ X kW" measured in October says nothing about January. Durable instead:
 ## Byte-level RE of the glow / fan slots — full ignition cycle (2026-10-12)
 
 Captured our XMZ-D2 across a complete off → glow-preheat → ignited → running →
-stopping cycle (501 heater frames, raw `<<<` sniff, 1 Hz). Script:
-`scratch/parse_cycle.py`, data `scratch/vevor-cycle-raw.log`.
+stopping cycle (649 heater frames over 16:43:31-16:54:28, raw `<<<` sniff,
+1 Hz; timestamps verified monotonic so no mixed-writer corruption). Scripts:
+`scratch/parse_cycle.py`, `scratch/parse_cycle2.py`; data
+`scratch/vevor-cycle-full.log`.
 
 **Fan voltage — IDENTIFIED: byte 15.** Integer, 0-16. 0 = fan stopped; 8-11 at
 our running speeds; the maximum tracks the unit's own supply rail (ours peaks 11
