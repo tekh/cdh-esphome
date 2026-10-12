@@ -333,6 +333,62 @@ ssh hoas 'docker exec -w /data app_5c53de3b_esphome /usr/local/bin/esphome uploa
 Workdir `/data` (build cache `/data/build/lab-heater`), HA config mounted at
 `/config`. Device: lab-heater.iot.stmartin.one (10.12.30.157).
 
+## vevor_2kw_v2 profile — user-owned HEAT (2026-10-12)
+
+`heater_model: vevor_2kw_v2` = identical hardware mapping to v1, but in HEAT
+mode the firmware sends the user's level verbatim in state 5: no approach
+control, no HX-soot pump override. AUTO is unchanged. Still active in v2 HEAT
+(protection, not tuning): ignition warm-up ramp (state 4), HX-too-hot pump
+decrease, HX-critical stop, configurable ambient limit. Revert = one YAML line
+(`vevor_2kw` for v1, `jeabong_8kw` for the 8kW BDAP unit) + reflash.
+
+Why it exists: v1's HEAT mode modulated the level under the user (approach
+control) and its HX-soot override forced the pump up whenever HX < 145 °C with
+a requested reduction — the exact behaviour that fights a low-power setpoint.
+
+Bench-verified on the real unit (HX started cold, ~33 °C):
+
+| check | result |
+|---|---|
+| state 4 (ignition) | TX level 0x0A, RX power 10, pump 1.7→2.2 Hz, fan 2847→3398 RPM, HX 52→65 → warm-up ramp works |
+| state 5, setpoint 0.5 Hz | TX level 0x01, RX power 1, pump 1.6 Hz, fan ~3200, HX 147 → **user's level verbatim** |
+| setpoint 1.2 Hz | TX level 0x04, RX power 4, pump 1.8 Hz, fan 3500 → live change honoured |
+| back to 0.5 Hz | TX level 0x01, RX power 1, pump 1.6 Hz, fan 3200 |
+| pump number entity | held 0.5 through the state-4 ramp → sync fix works (no clobber) |
+| overrides | zero "HX soot safety override" lines in state 5 |
+
+**Correction to the earlier "pump speed is level-independent" note:** that was
+two points confounded by a state change (level 10 in state 4 vs level 1 in
+state 5). With a clean single-state comparison the ECM DOES couple to the
+level — fan strongly (3200 RPM at level 1 → 3500 at level 4) and the pump
+weakly (1.6 → 1.8 Hz). The 1.6 Hz figure is a level-1 steady-state value, not
+a fixed constant.
+
+**Level ↔ façade mapping (measured):** 0.5 Hz → level 1, 1.0 Hz → 3,
+1.2 Hz → 4, 2.5 Hz → 10.
+
+**HX equilibrium at level 1 in current room conditions ≈ 154 °C**, i.e. level
+1 holds the HX above the 145 °C soot threshold — the override's trigger zone
+is not reachable at minimum power here (it mattered mainly for cold-start
+transients and for reductions while HX was low).
+
+### Calibration: why a frozen level→output curve is not worth building
+
+Ambient and intake-air conditions move the mapping: cold intake air is denser
+(more O2 per stroke), a cold room changes HX heat rejection, so "level 3 =
+X kW" measured in October says nothing about January. Durable instead:
+
+1. **Protocol/ECM behaviour facts** — obedience, level↔RX mapping, ramp
+   behaviour, pump/fan coupling. Firmware-determined, season-independent.
+   This is what the table above records.
+2. **Combustion proxy + closed loop** — control on HX temperature (the profile
+   already has `hx_temp_target`) rather than on a fixed level; the level then
+   becomes whatever holds the target in current conditions, self-correcting
+   for ambient, altitude, fuel quality and HX fouling.
+3. **Live density correction** — measure intake-air temperature (+ baro) and
+   derate with the same σ formula already used for altitude, instead of
+   freezing a curve to one season's air.
+
 ## References
 
 - zatakon / esphome-vevor-heater — working ESPHome component (our TX state machine,
