@@ -71,6 +71,7 @@ class HeaterUart : public PollingComponent, public uart::UARTDevice {
   void set_temperature_number(number::Number *num) { this->temperature_number_ = num; }
   void set_temperature_sensor(sensor::Sensor *sensor) { this->external_temp_sensor_ = sensor; }
   void set_pump_number(number::Number *num) { this->pump_number_ = num; }
+  void set_power_level_number(number::Number *num) { this->power_level_number_ = num; }
   void set_fan_probe_number(number::Number *num) { this->fan_probe_number_ = num; }
   void set_mode_select(select::Select *sel) { this->mode_select_ = sel; }
 
@@ -97,6 +98,13 @@ class HeaterUart : public PollingComponent, public uart::UARTDevice {
   void turn_off();
   void set_desired_temperature(float temperature);
   void set_pump_frequency(float frequency);
+  // Power-level dial (1-10) for profiles whose fuel command is a level, not a
+  // frequency (Vevor). Converts to the profile's Hz domain internally so the
+  // thermostat, the facade mapping and the TX boundary stay unchanged.
+  void set_power_level(uint8_t level);
+  // Current level for display: mirrors the user's setpoint on manual-HEAT
+  // profiles, otherwise the firmware's current request.
+  uint8_t get_power_level_display() const;
   // Experimental fan-speed probe (Vevor): 0 = disabled, >0 = write BE uint16
   // into undocumented TX bytes 10-11. See heater_fan_probe_number.h.
   void set_fan_probe_rpm(uint16_t rpm) { this->fan_probe_rpm_ = rpm; }
@@ -139,6 +147,9 @@ class HeaterUart : public PollingComponent, public uart::UARTDevice {
 
   // Pump frequency number reference (for state sync)
   number::Number *pump_number_{nullptr};
+
+  // Power level number reference (for state sync; Vevor-class profiles)
+  number::Number *power_level_number_{nullptr};
 
   // Fan speed probe number reference (experimental, Vevor undocumented bytes)
   number::Number *fan_probe_number_{nullptr};

@@ -167,40 +167,27 @@ number:
     web_server:
       sorting_group_id: sorting_group_controls
 
-  # Pump frequency is automatically controlled by the thermostat logic in standalone mode
-  # Range must match the active heater_model profile:
-  #   jeabong_8kw: 1.3-5.5 Hz | vevor_2kw: 0.5-2.5 Hz
-  # (on Vevor the Hz value is converted to a power level 1-10 at the TX boundary)
+  # THE fuel dial for this heater (Vevor 2kW = level-commanded hardware).
+  # Levels 1-10; 1 is the minimum burn (ECM runs it at pump ~1.6 Hz / fan
+  # ~3200 RPM - the protocol floor). In HEAT mode the firmware sends this
+  # level verbatim. There is deliberately NO pump-frequency dial here and no
+  # fan dial: the Vevor protocol has no such commands (the fan-probe
+  # experiment on undocumented TX bytes was proven ignored - see
+  # @notes/vevor-protocol.md).
+  #
+  # The pump-frequency dial belongs to the 8kW BDAP device (has_pump_hz_control
+  # profile flag) - declare it there, not here. This dial refuses writes on
+  # hardware that has no power-level command, so the two can never both be live.
   - platform: heater_uart
-    type: pump
-    name: "Pump Frequency Control"
-    id: heater_pump_frequency
+    type: power_level
+    name: "Power Level"
+    id: heater_power_level
     heater_uart_id: heater
-    min_value: 0.5
-    max_value: 2.5
-    step: 0.1
-    unit_of_measurement: "Hz"
-    icon: "mdi:fuel"
-    web_server:
-      sorting_group_id: sorting_group_controls
-
-  # EXPERIMENTAL fan-speed probe (Vevor 2kW).
-  # The documented protocol has NO fan command - only power levels 1-10.
-  # When set > 0, the RPM is written BE uint16 into undocumented TX bytes
-  # 10-11 to test whether the ECM accepts a fan target (goal: push the pump
-  # below the 1.6 Hz level-1 floor). 0 = disabled (protocol-default bytes).
-  # Watch sensor.lab_heater_error_code and run_state; set back to 0 if the
-  # heater misbehaves.
-  - platform: heater_uart
-    type: fan_probe
-    name: "Fan Speed Probe"
-    id: heater_fan_probe
-    heater_uart_id: heater
-    min_value: 0
-    max_value: 4000
-    step: 50
-    unit_of_measurement: "RPM"
-    icon: "mdi:fan"
+    min_value: 1
+    max_value: 10
+    step: 1
+    mode: slider
+    icon: "mdi:speedometer"
     web_server:
       sorting_group_id: sorting_group_controls
 

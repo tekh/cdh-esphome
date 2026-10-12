@@ -29,11 +29,16 @@ HeaterFanProbeNumber = heater_uart_ns.class_(
     "HeaterFanProbeNumber", number.Number, cg.Component
 )
 
+HeaterPowerLevelNumber = heater_uart_ns.class_(
+    "HeaterPowerLevelNumber", number.Number, cg.Component
+)
+
 CONF_HEATER_UART_ID = "heater_uart_id"
 
 # Number types
 TYPE_TEMPERATURE = "temperature"
 TYPE_PUMP = "pump"
+TYPE_POWER_LEVEL = "power_level"
 TYPE_FAN_PROBE = "fan_probe"
 
 TEMPERATURE_SCHEMA = (
@@ -62,6 +67,23 @@ PUMP_SCHEMA = (
     .extend(cv.COMPONENT_SCHEMA)
 )
 
+# Power-level dial (1-10). The fuel control on level-commanded hardware
+# (Vevor 2kW). Writes are refused at runtime unless the active profile's
+# has_power_level_control flag is set, so it can never coexist with the pump
+# frequency dial on the same heater.
+POWER_LEVEL_SCHEMA = (
+    number.number_schema(HeaterPowerLevelNumber)
+    .extend(
+        {
+            cv.GenerateID(CONF_HEATER_UART_ID): cv.use_id(HeaterUart),
+            cv.Optional(CONF_MIN_VALUE, default=1): cv.float_,
+            cv.Optional(CONF_MAX_VALUE, default=10): cv.float_,
+            cv.Optional(CONF_STEP, default=1): cv.float_,
+        }
+    )
+    .extend(cv.COMPONENT_SCHEMA)
+)
+
 # Experimental fan-speed probe (Vevor only). 0 = disabled (undocumented TX
 # bytes 10-11 stay 0x00); >0 = BE uint16 RPM written into TX bytes 10-11.
 FAN_PROBE_SCHEMA = (
@@ -81,6 +103,7 @@ CONFIG_SCHEMA = cv.typed_schema(
     {
         TYPE_TEMPERATURE: TEMPERATURE_SCHEMA,
         TYPE_PUMP: PUMP_SCHEMA,
+        TYPE_POWER_LEVEL: POWER_LEVEL_SCHEMA,
         TYPE_FAN_PROBE: FAN_PROBE_SCHEMA,
     },
     default_type=TYPE_TEMPERATURE,

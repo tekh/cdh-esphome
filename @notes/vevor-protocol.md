@@ -357,6 +357,31 @@ Bench-verified on the real unit (HX started cold, ~33 °C):
 | pump number entity | held 0.5 through the state-4 ramp → sync fix works (no clobber) |
 | overrides | zero "HX soot safety override" lines in state 5 |
 
+### Control surface on v2 (one fuel dial per heater)
+
+HEAT-mode dials for the 2kW device: **target temperature + power level** — and
+nothing else. Implemented 2026-10-12:
+
+- new `Power Level` number entity (1-10, step 1) — converts to the profile's Hz
+  domain internally (`set_power_level()`), so the thermostat, the facade mapping
+  and the TX boundary are unchanged. Verified on the wire with the heater off:
+  dial 6 → TX byte8 `0x06`, dial 2 → `0x02`, checksums valid.
+- the pump-frequency dial is REMOVED from this device's YAML (it belongs to the
+  8kW BDAP device, where the frame really carries pump Hz).
+- the fan probe entity is removed from the YAML too (experiment closed: bytes
+  ignored). The entity type stays in the component for a future re-test.
+- `get_power_level_display()` mirrors the user's setpoint on manual-HEAT
+  profiles, otherwise the firmware's live request — so in AUTO the dial moves on
+  its own, in v2 HEAT it moves only when the user moves it.
+- runtime guards (`has_pump_hz_control` / `has_power_level_control` /
+  `has_fan_rpm_control` profile flags) refuse writes for a control the active
+  hardware does not have, so the two fuel dials can never both be live even if
+  the YAML declares the wrong one.
+- pump Hz and fan RPM remain READ-ONLY sensors: the window into what the ECM
+  decided, not levers.
+- `Fuel Prime` button refuses on Vevor (no documented prime command; the heater
+  self-primes during every start) — 8kW only.
+
 **Correction to the earlier "pump speed is level-independent" note:** that was
 two points confounded by a state change (level 10 in state 4 vs level 1 in
 state 5). With a clean single-state comparison the ECM DOES couple to the

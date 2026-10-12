@@ -27,6 +27,15 @@ void HeaterPumpNumber::control(float value) {
         return;
     }
 
+    // One fuel dial per heater: level-commanded hardware (Vevor) has no pump-Hz
+    // command at all - refuse the write rather than pretend.
+    if (!this->parent_->get_profile().has_pump_hz_control) {
+        ESP_LOGW(TAG, "Pump frequency is not commandable on %s (level-commanded hardware) - use the power level dial",
+                 this->parent_->get_profile().name);
+        this->publish_state(this->parent_->get_pump_frequency_setting());
+        return;
+    }
+
     // Clamp the value to the active profile's pump frequency range
     if (value < this->parent_->get_pump_freq_min()) value = this->parent_->get_pump_freq_min();
     if (value > this->parent_->get_pump_freq_max()) value = this->parent_->get_pump_freq_max();

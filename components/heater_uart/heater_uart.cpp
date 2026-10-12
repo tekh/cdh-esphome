@@ -229,6 +229,11 @@ void HeaterUart::update() {
             pump_number_->publish_state(pump_freq_setting_);
         }
     }
+
+    // Sync power level dial (level-commanded profiles: Vevor)
+    if (power_level_number_ != nullptr) {
+        power_level_number_->publish_state(get_power_level_display());
+    }
 }
 
 void HeaterUart::parse_frame(const uint8_t *frame, size_t length) {
@@ -349,6 +354,35 @@ void HeaterUart::set_pump_frequency(float frequency) {
     pump_freq_setting_ = frequency;
     pump_freq_user_request_ = frequency;  // user's setpoint (manual-HEAT authority)
     // Frequency will be sent in next frame automatically (standalone mode)
+}
+
+void HeaterUart::set_power_level(uint8_t level) {
+    if (level < 1) level = 1;
+    if (level > 10) level = 10;
+
+    // The thermostat and the TX boundary both work in the Hz domain; the level
+    // is the honest unit for level-commanded hardware. Same mapping the TX
+    // boundary uses in reverse: level = 1 + round(ratio * 9).
+    float span = profile_.pump_freq_max - profile_.pump_freq_min;
+    float hz = profile_.pump_freq_min + (static_cast<float>(level - 1) / 9.0f) * span;
+    if (hz < profile_.pump_freq_min) hz = profile_.pump_freq_min;
+    if (hz > profile_.pump_freq_max) hz = profile_.pump_freq_max;
+
+    ESP_LOGI(TAG, "Setting power level %u (%.2f Hz equivalent on %s)", level, hz, profile_.name);
+    set_pump_frequency(hz);
+}
+
+uint8_t HeaterUart::get_power_level_display() const {
+    // Mirror the user's setpoint on manual-HEAT profiles (the ignition ramp
+    // must not show up on the dial), otherwise the firmware's live request.
+    float hz = (profile_.heat_mode_manual && heater_mode_ == HeaterMode::ON)
+                   ? pump_freq_user_request_
+                   : pump_freq_setting_;
+    float span = profile_.pump_freq_max - profile_.pump_freq_min;
+    float ratio = (span > 0.0f) ? (hz - profile_.pump_freq_min) / span : 0.0f;
+    if (ratio < 0.0f) ratio = 0.0f;
+    if (ratio > 1.0f) ratio = 1.0f;
+    return static_cast<uint8_t>(1 + static_cast<int>(ratio * 9.0f + 0.5f));
 }
 
 void HeaterUart::set_heater_mode(HeaterMode mode) {
