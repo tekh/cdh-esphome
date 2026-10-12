@@ -147,6 +147,20 @@ sensor:
       name: "Fan Voltage"
       web_server:
         sorting_group_id: sorting_group_sensors
+    # Raw glow-cluster bytes - non-zero only while the glow is lit. Quantity
+    # unidentified (voltage? temperature?), so published raw and unit-less.
+    glow_a:
+      name: "Glow A (unverified)"
+      web_server:
+        sorting_group_id: sorting_group_sensors
+    glow_b:
+      name: "Glow B (unverified)"
+      web_server:
+        sorting_group_id: sorting_group_sensors
+    glow_c:
+      name: "Glow C (unverified)"
+      web_server:
+        sorting_group_id: sorting_group_sensors
     desired_temperature:
       name: "Desired Temperature"
       web_server:

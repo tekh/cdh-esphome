@@ -30,6 +30,13 @@ SENSORS = {
     "pump_frequency": ("Pump Frequency", UNIT_HERTZ, ICON_EMPTY),
     "fan_voltage": ("Fan Voltage", UNIT_VOLT, ICON_FLASH),
     "desired_temperature": ("Desired Temperature", UNIT_CELSIUS, ICON_THERMOMETER),
+    # Raw glow-cluster bytes (Vevor bytes 24-26). Non-zero only while the glow is
+    # lit, ramping into the 80-100 range, but voltage vs temperature vs anything
+    # else is NOT identified. Published raw and unit-less on purpose - do not give
+    # these a unit or a physical name until something independent pins them.
+    "glow_a": ("Glow A (unverified)", UNIT_EMPTY, ICON_EMPTY),
+    "glow_b": ("Glow B (unverified)", UNIT_EMPTY, ICON_EMPTY),
+    "glow_c": ("Glow C (unverified)", UNIT_EMPTY, ICON_EMPTY),
 }
 
 CONFIG_SCHEMA = cv.Schema(

@@ -44,32 +44,37 @@ Status markers: **OPEN** (actionable) · **PARKED** (deliberately deferred) ·
 
 ## 2kW / vevor_2kw + vevor_2kw_v2 (XMZ-D2) — OPEN
 
-5. **OPEN — the parser's byte-13 mapping is wrong on this hardware.**
-   `parse_vevor_rx_frame()` publishes byte 13 as glow-plug current (gated ≤ 40 A).
-   Full-cycle capture (649 frames, `scratch/vevor-cycle-full.log`) disproves it:
-   byte 13 is **0 through the entire glow-preheat phase** (glow definitively on),
-   and **78-128 while running with the glow off**. Its only observed values are
-   {0, 78, 88, 98, 108, 118, 128} — a 10-step ladder (0 to −50 in offset-128, or a
-   ×10 fixed-point of an integer 8..13). It also drifts 108 ↔ 128 in the off state
-   with fan 0 and HX flat, i.e. it moves with no load → internal/self-measured
-   quantity, not combustion. The real values are elsewhere:
-   - **byte 15 = fan voltage**, integer 0-16: 0 when the fan is stopped, 8-11 at
-     running speeds, ceiling tracks the supply rail (ours 11 of 13.2 V). RPM lags it.
-   - **bytes 24-27 = glow cluster**, non-zero ONLY while the glow is lit, ramping
-     then zeroing (ignition glow ~103 s → peak 101/93/83/12; post-run glow ~40 s →
-     peak 79/89/78/10). **b27 is the current candidate** (range 4-12, matching the
-     reference unit's glow-current byte 0-11).
-   Closes when: the parser decodes byte 15 + the b24-27 cluster and stops
-   publishing byte 13 as current. Open sub-question: what to *name* the cluster
-   members while b24/b25/b26 (voltage vs temperature) remain unseparated without an
-   amp clamp.
+5. **FIXED 2026-10-12 — the parser no longer decodes byte 13.** It now decodes the
+   slots the capture proved: **byte 15 → `fan_voltage`**, **byte 27 → glow current**
+   (candidate), and **bytes 24-26 → `glow_a`/`glow_b`/`glow_c`** published raw and
+   unit-less as "unverified". Verified live on the bench: during ignition glow
+   a/b/c read 99/92/83 with current 11.0 A, all four returning to 0 when the glow
+   extinguished; while running, fan voltage read 11.0 V at 3692 RPM.
+   Evidence: 649-frame full cycle (`scratch/vevor-cycle-full.log`), incl. the
+   disproof of byte 13 (0 through the whole glow-preheat phase; 78-128 while
+   running with the glow off; only ever {0,78,88,98,108,118,128} — a 10-step
+   ladder, and it drifts in the off state with fan 0 and HX flat, i.e. it moves
+   with no load → internal/self-measured quantity).
+   **Still open:** which of bytes 24-26 is voltage vs temperature can't be
+   separated without a second instrument; `glow_plug_voltage` therefore stays
+   undecoded (0.0) rather than publishing a guess. Closes when: something
+   independent pins the cluster members (amp clamp, DMM on the glow lead).
 
-6. **OPEN — two entities never decode on the Vevor path.**
-   `sensor.lab_heater_fan_voltage` and `sensor.lab_heater_glow_plug_voltage` read
-   0.0 permanently because `parse_vevor_rx_frame()` never assigns them. Fan voltage
-   is now identified (item 5); glow voltage is not yet. Closes with item 5.
+6. **PARTLY FIXED 2026-10-12 — `fan_voltage` now decodes (byte 15, verified reading
+   11.0 V at 3692 RPM).** `sensor.lab_heater_glow_plug_voltage` still reads 0.0 and
+   is deliberately left undecoded: pointing it at one of the glow-cluster bytes
+   would be a guess dressed as a measurement. Closes with item 5's open half.
 
-7. **OPEN — `hx_temp_low = 145` sits above the level-1 equilibrium.**
+7. **OPEN — level-commanded profiles boot to a mid-range level, not minimum.**
+   `pump_freq_user_request_` initialises to 1.6 Hz (a v1-era default), which on the
+   level facade is **level 6** — so the Power Level dial reads 6 after every reboot,
+   and a HEAT start before anyone touches the dial burns at level 6. For a
+   level-commanded profile a boot default of level 1 (minimum burn) is the honest
+   default; it is a one-line change (initialise the user request to
+   `pump_freq_min` when `has_power_level_control`). Closes when: the default is
+   changed and verified, or the current default is declared intentional.
+
+8. **OPEN — `hx_temp_low = 145` sits above the level-1 equilibrium.**
    Measured: at level 1 this room equilibrates the HX around **154 °C**, i.e. the
    soot-override trigger zone is barely reachable at minimum power (it mattered for
    cold transients and for reductions while HX was low). Candidate: lower to ~110-120.
@@ -77,21 +82,21 @@ Status markers: **OPEN** (actionable) · **PARKED** (deliberately deferred) ·
    this only affects v1 HEAT / AUTO. Closes when: a value is chosen from more
    low-power data.
 
-8. **OPEN — long-hold and transition behaviour untested.**
+9. **OPEN — long-hold and transition behaviour untested.**
    No soak beyond ~10 minutes. Unknown: does the ECM hold a level for hours, does it
    drift, and are level changes sent *during* a transition queued or dropped? These
    are firmware-determined and season-independent, so they are worth testing once.
    Closes with: a multi-hour hold at a fixed level, and a level change timed inside
    ignition/cooldown.
 
-9. **OPEN — level → output is not calibrated, deliberately.**
+10. **OPEN — level → output is not calibrated, deliberately.**
    A frozen level→kW curve is worthless across seasons (intake air density, room
    ΔT). The durable path is a closed loop on HX temperature plus a live density
    correction using intake-air temperature and baro — the same σ formula already
    used for altitude. Related: the standing `TODO` line (BME280 for automatic
    altitude) is the sensor half of this.
 
-10. **OPEN — hardcoded API key in `lab-heater-butler.yaml`, public repo.**
+11. **OPEN — hardcoded API key in `lab-heater-butler.yaml`, public repo.**
     The ESPHome API encryption key is inline; the repo is public. Pre-existing
     (already published on `origin/full_control_w_autoshutoff` before 2026-10-12),
     so this push did not newly expose it. Device is LAN-only, so practical risk is

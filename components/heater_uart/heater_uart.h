@@ -223,6 +223,11 @@ class HeaterUart : public PollingComponent, public uart::UARTDevice {
   float heat_exchanger_temp_value_ = 0;
   float glow_plug_voltage_value_ = 0;
   float glow_plug_current_value_ = 0;
+  // Vevor glow cluster bytes 24-26: glow-phase activity, quantity unidentified.
+  // Kept raw (no scaling, no unit) until something independent pins them.
+  float glow_a_value_ = 0;
+  float glow_b_value_ = 0;
+  float glow_c_value_ = 0;
   float pump_frequency_value_ = 0;
   float fan_voltage_value_ = 0;
   int desired_temperature_value_ = 0;
@@ -257,7 +262,6 @@ class HeaterUart : public PollingComponent, public uart::UARTDevice {
   uint8_t vevor_rx_[64];
   int vevor_rx_index_ = 0;
   uint32_t vevor_rx_last_byte_ = 0;
-  uint8_t vevor_byte13_last_ = 0xFF;  // debounce for out-of-range byte 13 log
 
   // Mappings for error and run states
   static const std::map<int, std::string> run_state_map;

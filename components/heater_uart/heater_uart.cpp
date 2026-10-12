@@ -186,6 +186,12 @@ void HeaterUart::update() {
             sensor->publish_state(pump_frequency_value_);
         else if (key == "fan_voltage")
             sensor->publish_state(fan_voltage_value_);
+        else if (key == "glow_a")
+            sensor->publish_state(glow_a_value_);
+        else if (key == "glow_b")
+            sensor->publish_state(glow_b_value_);
+        else if (key == "glow_c")
+            sensor->publish_state(glow_c_value_);
         else if (key == "desired_temperature")
             sensor->publish_state(desired_temperature_value_);
     }
@@ -1239,22 +1245,29 @@ void HeaterUart::parse_vevor_rx_frame(const uint8_t *frame, size_t length) {
     on_off_value_ = (vs != 0);
 
     supply_voltage_value_ = frame[11] * 0.1f;                                          // V x10
-    // byte 13: glow plug current on the reference Vevor (their capture: 0x06..0x0B =
-    // 6-11 A during states 2 & 4 - ignition warm-up and post-run glow - 0 otherwise,
-    // matching the RE table's 0-12 A guess). The XMZ-D2 reports 0x74..0xA6 (116-166)
-    // in the same slot even at idle - outside any plausible glow range - so publish
-    // only plausible values and log outliers for further RE.
-    uint8_t glow_raw = frame[13];
-    if (glow_raw <= 40) {
-        glow_plug_current_value_ = glow_raw;
-    } else {
-        if (glow_raw != vevor_byte13_last_) {
-            ESP_LOGD(TAG, "VEVOR: byte13 0x%02X outside glow-current range (state %d) - suppressed",
-                     glow_raw, vs);
-            vevor_byte13_last_ = glow_raw;
-        }
-        glow_plug_current_value_ = 0;
-    }
+
+    // Byte 15: fan voltage (integer volts, 0-16). Identified from a full-cycle capture
+    // (649 frames): 0 when the fan is stopped, 8-11 at running speeds, and the ceiling
+    // tracks the unit's own supply rail (ours 11 of 13.2 V; the reference unit 16 of
+    // its 15.5 V rail). Fan RPM LAGS it - it is the commanded drive, not a tach echo.
+    fan_voltage_value_ = frame[15];
+
+    // Bytes 24-27: glow-plug cluster. Non-zero ONLY while the glow is lit (ignition
+    // glow and post-run glow), ramping up then zeroing - verified across two glow
+    // episodes in the same capture.
+    //   byte 27 -> glow current: range 4-12, matching the reference unit's glow-current
+    //              byte (0-11 A during exactly these phases). CANDIDATE, not clamp-verified.
+    //   bytes 24-26 -> ramp together into the 80-100 range; voltage vs temperature is
+    //              NOT separated, so they are published RAW and unit-less.
+    // NOTE: byte 13 is deliberately NOT decoded any more. On the XMZ-D2 it reads 0
+    // through the whole glow-preheat phase (glow definitively on) and 78-128 while
+    // running with the glow off, with only {0,78,88,98,108,118,128} ever observed -
+    // so it is not glow current on this revision. See ISSUES.md #5.
+    glow_plug_current_value_ = frame[27];
+    glow_a_value_ = frame[24];
+    glow_b_value_ = frame[25];
+    glow_c_value_ = frame[26];
+
     heat_exchanger_temp_value_ = static_cast<int16_t>((frame[16] << 8) | frame[17]) * 0.1f;  // int16, x10
     pump_frequency_value_ = frame[23] * 0.1f;                                          // Hz x10
     fan_speed_value_ = (frame[28] << 8) | frame[29];                                   // RPM

@@ -449,13 +449,17 @@ lit.** Two episodes captured, both ramping smoothly and then zeroing:
   4) *and* a current value at its byte 13 — so the two revisions expose the same
   physics in different slots.
 
-**byte 13 on our unit is NOT glow current — our parser is wrong here.** Proof:
-it is 0 through the whole glow-preheat phase (glow definitively on) and non-zero
-(78-128) while running with the glow off. Its distinct values are only
-{0, 78, 88, 98, 108, 118, 128} — a 10-step ladder (equivalently 0,-10..-50 in
-offset-128, or a ×10 fixed-point of an integer 8..13). Quantity unidentified.
-Current parser maps byte 13 → glow current (gated ≤40) → should be replaced by
-the b24-27 cluster + byte 15 fan voltage.
+**byte 13 on our unit is NOT glow current. FIXED 2026-10-12** — it is 0 through the
+whole glow-preheat phase (glow definitively on) and non-zero (78-128) while running
+with the glow off. Its distinct values are only {0, 78, 88, 98, 108, 118, 128} — a
+10-step ladder (equivalently 0,-10..-50 in offset-128, or a ×10 fixed-point of an
+integer 8..13), drifting in the off state with fan 0 and HX flat → internal/self-
+measured quantity, unidentified. The parser no longer decodes it; it now reads
+**byte 15 → fan_voltage**, **byte 27 → glow current (candidate)** and **bytes 24-26
+→ glow_a/glow_b/glow_c** (raw, unit-less, "unverified" in the entity names).
+Bench-verified live after the remap: during ignition glow a/b/c = 99/92/83 with
+current 11.0 A, all returning to 0 when the glow extinguished; fan voltage 11.0 V
+at 3692 RPM while running.
 
 **Other revision drift (ours vs the reference unit):**
 - byte 52-53: glow-phase values 0-410/420 on the reference, always 0 on ours.
