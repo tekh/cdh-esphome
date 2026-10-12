@@ -1128,8 +1128,25 @@ void HeaterUart::send_vevor_frame() {
     frame[8] = 1 + static_cast<uint8_t>(ratio * 9.0f + 0.5f);
 
     frame[9] = requested_state;
+
+    // Experimental fan-speed probe. The documented Vevor 2kW protocol has NO
+    // fan command: the frame carries only power level (byte 8) and requested
+    // state (byte 9), and every live capture shows bytes 10-14 as 0x00.
+    // When fan_probe_rpm_ > 0 we write it as a BE uint16 into bytes 10-11,
+    // mirroring the RX fan encoding (uint16 RPM at RX 28-29), to test whether
+    // the ECM accepts a fan target (e.g. to push the pump below the 1.6 Hz
+    // level-1 floor). 0 = disabled: protocol-default bytes.
+    //
+    // NOTE: frame[] is a local stack array - bytes 10-11 MUST be zeroed
+    // explicitly here when the probe is disabled, otherwise they carry
+    // uninitialised stack garbage onto the bus (observed 0xFB 0x3F).
     frame[10] = 0x00;
     frame[11] = 0x00;
+    if (fan_probe_rpm_ > 0) {
+        frame[10] = (fan_probe_rpm_ >> 8) & 0xFF;
+        frame[11] = fan_probe_rpm_ & 0xFF;
+    }
+
     frame[12] = 0x00;
     frame[13] = 0x00;
     frame[14] = 0x00;

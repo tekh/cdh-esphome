@@ -245,6 +245,94 @@ upgrade: a BME280 baro sensor feeding live σ = (P/101325)·(288.15/(T+273.15)) 
 `altitude_` as fallback. The HX soot-safety loop is deliberately left as a reactive
 backstop, not the primary mechanism (it would fight derating).
 
+## The 1.6 Hz / ~3200 RPM floor — and why no fan control exists (2026-10-12)
+
+Observed: with `Pump Frequency Control` at 0.5 Hz the heater reports pump
+1.6 Hz, fan ~3200 RPM, level 1. The ECM appears to "ignore" anything below
+1.6 Hz.
+
+**It isn't.** The protocol only carries power levels 1-10 (TX byte 8); the
+0.5-2.5 Hz number is this component's facade mapped linearly to levels
+(`send_vevor_frame()`). Level 1 is the lowest commandable state, and the ECM
+runs level 1 at pump ≈1.6 Hz / fan ≈3200 RPM. There is no sub-level-1
+command. Verified sources:
+
+- zatakon/vevor_heater_control RE table: controller→heater frame has only
+  level (byte 8) + requested state (byte 9) with non-zero values; bytes 4-7
+  and 10-14 observed 0x00 in **every** captured state (start/running/stop).
+- zatakon/esphome-vevor-heater `buildSendFrame()`: same, unknowns hard-zeroed.
+- Fan speed is RX-only (uint16 RPM, RX bytes 28-29) — the ECM sets fan from
+  level; the protocol has no fan command field at all (unlike BDAP, where
+  fan RPM is a real TX field).
+
+**Experiment: fan-speed probe (undocumented bytes 10-11) — RESULT (2026-10-12).**
+Added `heater_fan_probe_number` (entity `number.lab_heater_fan_speed_probe`,
+0 = disabled / protocol-default bytes; >0 = BE uint16 RPM written into TX
+bytes 10-11, mirroring the RX fan encoding) and ran the probe at the
+level-1 floor:
+
+| step (RPM) | TX bytes 10-11 | pump | fan | HX | error |
+|---|---|---|---|---|---|
+| baseline | 00 00 | 1.6 Hz | 3201 | 160.8 | No Error |
+| 2400 | 09 60 (verified on wire) | 1.6 Hz | 3205 | 157.5 | No Error |
+| 1900 | 07 6C | 1.6 Hz | 3217 | 156.7 | No Error |
+| 1500 | 05 DC | 1.6 Hz | 3193 | 156.9 | No Error |
+| off | 00 00 | — (cooldown) | 2501 (purge) | 87↓ | No Error |
+
+**Verdict: the ECM ignores TX bytes 10-11.** Pump stayed at exactly 1.6 Hz
+(sensor `last_changed` never moved during the 8 min experiment), fan within
+its normal ±30 RPM wander, zero errors. Combined with the level-1 floor and
+the constant pump speed (~1.5-1.6 Hz at level 1 AND level 10 — see below),
+the conclusion is firm: **there is no protocol path below 1.6 Hz on this
+heater.** The 1.6 Hz pump is a near-constant baseline; the power level
+modulates fuel output per stroke, not pump speed. If sub-floor heat output
+is ever wanted, the only lever is duty-cycling level 1 (intermittent
+run/off) in the component's thermostat — not the wire protocol.
+
+Probe entity kept (harmless at 0, useful if a future Vevor generation or
+better RE reveals what bytes 10-14 are). Default is 0 = protocol-default
+bytes.
+
+**Bug found during the experiment (fixed + re-flashed same day):** the first
+build left TX bytes 10-11 uninitialised on the stack when the probe was 0 —
+raw wire capture showed garbage (FB 3F / FC 3F / FF FF) every 5 s (correlated
+with the pump-adjustment tick; floats like 0x3FFC0000 = 1.0f), with valid
+checksums. The ECM ignored them (heated normally), but the fix is explicit
+zero-init of frame[10]/[11] before the probe write; post-fix capture shows
+clean `00 00`.
+
+**Bonus finding — pump speed is level-independent (live data):** during
+ignition (state 4, level 10) the pump dosed at 1.5 Hz and in stable
+combustion (state 5, level 1) at 1.6 Hz. The ECM holds pump speed near
+1.5-1.6 Hz across the whole level range; fan moves with state/level
+(~1500 ignition → ~3200 at level 1 steady → ~2500 cooldown purge). The
+"pump frequency" in the RX frame is therefore a poor proxy for output;
+power level + HX temp are the real operating points. The profile's
+`hx_temp_low` = 145 soot override still fights low-power mode (it forced
+pump to level 10 until HX > 145°C this run) — the earlier note's proposal
+to lower it to ~110-120 remains open.
+
+Method used: mode→Heat, pump_control 0.5 (level 1), wait for state 5 +
+pump at floor (HX > 145°C so the soot override releases), then probe
+2400→1900→1500 RPM with 60-90 s samples and a raw TX capture via
+`esphome logs` (proves the probe bytes are actually on the wire before
+interpreting a negative). Restore: probe 0, mode Off.
+
+## Deploy path (lab-heater)
+
+Repo (this dir's parent) is source of truth; hoas holds a copy:
+`/homeassistant/esphome/lab-heater-butler.yaml` +
+`/homeassistant/esphome/components/heater_uart/`. Compile/upload inside the
+HAOS addon container:
+
+```bash
+ssh hoas 'docker exec -w /data app_5c53de3b_esphome /usr/local/bin/esphome compile /config/esphome/lab-heater-butler.yaml'
+ssh hoas 'docker exec -w /data app_5c53de3b_esphome /usr/local/bin/esphome upload  /config/esphome/lab-heater-butler.yaml'
+```
+
+Workdir `/data` (build cache `/data/build/lab-heater`), HA config mounted at
+`/config`. Device: lab-heater.iot.stmartin.one (10.12.30.157).
+
 ## References
 
 - zatakon / esphome-vevor-heater — working ESPHome component (our TX state machine,

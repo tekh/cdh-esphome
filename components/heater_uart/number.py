@@ -25,11 +25,16 @@ HeaterPumpNumber = heater_uart_ns.class_(
     "HeaterPumpNumber", number.Number, cg.Component
 )
 
+HeaterFanProbeNumber = heater_uart_ns.class_(
+    "HeaterFanProbeNumber", number.Number, cg.Component
+)
+
 CONF_HEATER_UART_ID = "heater_uart_id"
 
 # Number types
 TYPE_TEMPERATURE = "temperature"
 TYPE_PUMP = "pump"
+TYPE_FAN_PROBE = "fan_probe"
 
 TEMPERATURE_SCHEMA = (
     number.number_schema(HeaterTemperatureNumber)
@@ -57,10 +62,26 @@ PUMP_SCHEMA = (
     .extend(cv.COMPONENT_SCHEMA)
 )
 
+# Experimental fan-speed probe (Vevor only). 0 = disabled (undocumented TX
+# bytes 10-11 stay 0x00); >0 = BE uint16 RPM written into TX bytes 10-11.
+FAN_PROBE_SCHEMA = (
+    number.number_schema(HeaterFanProbeNumber)
+    .extend(
+        {
+            cv.GenerateID(CONF_HEATER_UART_ID): cv.use_id(HeaterUart),
+            cv.Optional(CONF_MIN_VALUE, default=0): cv.float_,
+            cv.Optional(CONF_MAX_VALUE, default=4000): cv.float_,
+            cv.Optional(CONF_STEP, default=50): cv.float_,
+        }
+    )
+    .extend(cv.COMPONENT_SCHEMA)
+)
+
 CONFIG_SCHEMA = cv.typed_schema(
     {
         TYPE_TEMPERATURE: TEMPERATURE_SCHEMA,
         TYPE_PUMP: PUMP_SCHEMA,
+        TYPE_FAN_PROBE: FAN_PROBE_SCHEMA,
     },
     default_type=TYPE_TEMPERATURE,
 )

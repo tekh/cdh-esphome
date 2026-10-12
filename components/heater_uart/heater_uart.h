@@ -71,6 +71,7 @@ class HeaterUart : public PollingComponent, public uart::UARTDevice {
   void set_temperature_number(number::Number *num) { this->temperature_number_ = num; }
   void set_temperature_sensor(sensor::Sensor *sensor) { this->external_temp_sensor_ = sensor; }
   void set_pump_number(number::Number *num) { this->pump_number_ = num; }
+  void set_fan_probe_number(number::Number *num) { this->fan_probe_number_ = num; }
   void set_mode_select(select::Select *sel) { this->mode_select_ = sel; }
 
   // Configuration setters
@@ -96,6 +97,10 @@ class HeaterUart : public PollingComponent, public uart::UARTDevice {
   void turn_off();
   void set_desired_temperature(float temperature);
   void set_pump_frequency(float frequency);
+  // Experimental fan-speed probe (Vevor): 0 = disabled, >0 = write BE uint16
+  // into undocumented TX bytes 10-11. See heater_fan_probe_number.h.
+  void set_fan_probe_rpm(uint16_t rpm) { this->fan_probe_rpm_ = rpm; }
+  uint16_t get_fan_probe_rpm() const { return fan_probe_rpm_; }
 
   // State accessors
   bool get_on_off_state() const { return on_off_value_; }
@@ -134,6 +139,10 @@ class HeaterUart : public PollingComponent, public uart::UARTDevice {
 
   // Pump frequency number reference (for state sync)
   number::Number *pump_number_{nullptr};
+
+  // Fan speed probe number reference (experimental, Vevor undocumented bytes)
+  number::Number *fan_probe_number_{nullptr};
+  uint16_t fan_probe_rpm_ = 0;  // 0 = disabled (TX bytes 10-11 stay 0x00)
 
    // Mode select reference (for state sync)
    select::Select *mode_select_{nullptr};

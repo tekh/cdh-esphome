@@ -180,6 +180,26 @@ number:
     web_server:
       sorting_group_id: sorting_group_controls
 
+  # EXPERIMENTAL fan-speed probe (Vevor 2kW).
+  # The documented protocol has NO fan command - only power levels 1-10.
+  # When set > 0, the RPM is written BE uint16 into undocumented TX bytes
+  # 10-11 to test whether the ECM accepts a fan target (goal: push the pump
+  # below the 1.6 Hz level-1 floor). 0 = disabled (protocol-default bytes).
+  # Watch sensor.lab_heater_error_code and run_state; set back to 0 if the
+  # heater misbehaves.
+  - platform: heater_uart
+    type: fan_probe
+    name: "Fan Speed Probe"
+    id: heater_fan_probe
+    heater_uart_id: heater
+    min_value: 0
+    max_value: 4000
+    step: 50
+    unit_of_measurement: "RPM"
+    icon: "mdi:fan"
+    web_server:
+      sorting_group_id: sorting_group_controls
+
 text_sensor:
   - platform: heater_uart
     run_state:
