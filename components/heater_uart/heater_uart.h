@@ -153,6 +153,12 @@ class HeaterUart : public PollingComponent, public uart::UARTDevice {
   // Pump frequency setting (Hz, for fixed Hz mode)
   float pump_freq_setting_ = 1.6f;  // Default to low pump rate
 
+  // User's requested pump setting (Hz). On profiles with heat_mode_manual the
+  // firmware sends THIS verbatim in HEAT/state-5 instead of modulating, and the
+  // pump number entity mirrors it (so the displayed setpoint never gets
+  // clobbered by the ignition warm-up ramp).
+  float pump_freq_user_request_ = 1.6f;
+
   // Frame handling
   uint8_t frame_[48];
   int frame_index_ = 0;

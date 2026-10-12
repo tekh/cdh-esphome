@@ -10,6 +10,7 @@ namespace heater_uart {
 enum class HeaterModel : uint8_t {
   JEABONG_8KW = 0,  // 8 kW Jeabong heater (original reference hardware)
   VEVOR_2KW = 1,    // 2 kW Vevor heater (replacement hardware)
+  VEVOR_2KW_V2 = 2, // 2 kW Vevor, EXPERIMENTAL: user owns the level in HEAT mode
 };
 
 // Which link-layer protocol the heater speaks.
@@ -57,6 +58,15 @@ struct HeaterProfile {
   float hx_temp_critical;     // above this: emergency shutdown
   float cooldown_target_temp; // HX °C at which cooldown fan stops
 
+  // --- control authority ---
+  // HEAT mode: when true, the user's level is sent verbatim in stable
+  // combustion (state 5) and the firmware does NOT modulate it - no approach
+  // control and no HX-soot pump override ("HEAT is where the user takes over
+  // the fine tuning"). The ignition warm-up ramp (state 4), the HX-too-hot
+  // decrease and the HX-critical stop still apply - those are protection, not
+  // tuning. AUTO mode is unaffected either way.
+  bool heat_mode_manual;
+
   // --- temperature setpoint range, °C ---
   uint8_t temp_min;
   uint8_t temp_max;
@@ -94,6 +104,7 @@ inline HeaterProfile profile_jeabong_8kw() {
   p.cooldown_target_temp = 60.0f;
   p.temp_min = 0;
   p.temp_max = 30;
+  p.heat_mode_manual = false;  // HEAT modulates like AUTO (original behaviour)
   return p;
 }
 
@@ -136,6 +147,27 @@ inline HeaterProfile profile_vevor_2kw() {
   p.cooldown_target_temp = 55.0f;
   p.temp_min = 0;
   p.temp_max = 30;
+  p.heat_mode_manual = false;  // v1: firmware keeps modulating HEAT
+  return p;
+}
+
+// ---------------------------------------------------------------------------
+// 2 kW Vevor - EXPERIMENTAL v2 profile
+// ---------------------------------------------------------------------------
+// Identical hardware mapping to profile_vevor_2kw() (levels 1-10, no pump-Hz or
+// fan-RPM command in the protocol), but the user owns the level in HEAT mode:
+// the firmware stops rewriting it in stable combustion (no approach control,
+// no HX-soot pump override). Kept as a SEPARATE profile so the bench can revert
+// to v1 behaviour by switching one YAML line back to `heater_model: vevor_2kw`.
+//
+// Safety that still applies in v2 HEAT: the ignition warm-up ramp (state 4),
+// the HX-too-hot pump decrease, the HX-critical emergency stop, and the
+// configurable room-temperature limit (ambient_heat_limit).
+inline HeaterProfile profile_vevor_2kw_v2() {
+  HeaterProfile p = profile_vevor_2kw();
+  p.name = "Vevor 2kW v2 (user-owned HEAT)";
+  p.model = HeaterModel::VEVOR_2KW_V2;
+  p.heat_mode_manual = true;
   return p;
 }
 
@@ -143,11 +175,14 @@ inline HeaterProfile profile_vevor_2kw() {
 inline const HeaterProfile &profile_for(HeaterModel model) {
   static const HeaterProfile jeabong = profile_jeabong_8kw();
   static const HeaterProfile vevor = profile_vevor_2kw();
+  static const HeaterProfile vevor_v2 = profile_vevor_2kw_v2();
   switch (model) {
     case HeaterModel::JEABONG_8KW:
       return jeabong;
     case HeaterModel::VEVOR_2KW:
       return vevor;
+    case HeaterModel::VEVOR_2KW_V2:
+      return vevor_v2;
     default:
       return jeabong;
   }

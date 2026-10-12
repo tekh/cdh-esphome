@@ -221,7 +221,13 @@ void HeaterUart::update() {
 
     // Sync pump number with current setting
     if (pump_number_ != nullptr) {
-        pump_number_->publish_state(pump_freq_setting_);
+        // Manual-HEAT profiles: mirror the user's setpoint, not the send value,
+        // so the ignition warm-up ramp never clobbers what they set.
+        if (profile_.heat_mode_manual && heater_mode_ == HeaterMode::ON) {
+            pump_number_->publish_state(pump_freq_user_request_);
+        } else {
+            pump_number_->publish_state(pump_freq_setting_);
+        }
     }
 }
 
@@ -341,6 +347,7 @@ void HeaterUart::set_pump_frequency(float frequency) {
 
     ESP_LOGI(TAG, "Setting pump frequency to %.1f Hz", frequency);
     pump_freq_setting_ = frequency;
+    pump_freq_user_request_ = frequency;  // user's setpoint (manual-HEAT authority)
     // Frequency will be sent in next frame automatically (standalone mode)
 }
 
@@ -889,6 +896,13 @@ void HeaterUart::thermostat_control() {
                 }
             }
         } else if (heater_mode_ == HeaterMode::ON) {
+            if (profile_.heat_mode_manual) {
+                // HEAT is user-owned: send the user's level verbatim in stable
+                // combustion. No approach control, no ramp-down - the user is
+                // the loop. (The ignition warm-up ramp in state 4 still ran
+                // above; protection overrides stay below.)
+                new_freq = pump_freq_user_request_;
+            } else {
             // HEAT mode: Continuous heat with approach control, no auto-shutdown
             // Ramp pump to minimum when approaching target, but keep heater running
 
@@ -921,11 +935,16 @@ void HeaterUart::thermostat_control() {
                     }
                 }
             }
+            }
         }
 
         // === SAFETY: Heat exchanger limits override thermostat ===
         // Combustion safety takes priority over comfort
-        if (hx_temp < profile_.hx_temp_low && new_freq < pump_freq_setting_) {
+        // In manual-HEAT the soot-increase is skipped: the user owns the level,
+        // and this override is exactly what used to fight a low-power setpoint.
+        // The HX-too-hot decrease below stays active - that is protection.
+        bool manual_heat = profile_.heat_mode_manual && heater_mode_ == HeaterMode::ON;
+        if (!manual_heat && hx_temp < profile_.hx_temp_low && new_freq < pump_freq_setting_) {
             // HX too cold but thermostat wants to reduce - override, force increase
             new_freq = pump_freq_setting_ + profile_.pump_freq_step;
             ESP_LOGW(TAG, "HX soot safety override: HX %.0f°C < %.0f°C, forcing pump increase to %.1f Hz",

@@ -36,7 +36,8 @@ CONFIG_SCHEMA = cv.Schema(
         # Required: which physical heater is connected. The selected profile
         # drives pump/fan/HX limits -> never leave this implicit.
         cv.Required(CONF_HEATER_MODEL): cv.enum(
-            {"jeabong_8kw": HeaterModel.JEABONG_8KW, "vevor_2kw": HeaterModel.VEVOR_2KW},
+            {"jeabong_8kw": HeaterModel.JEABONG_8KW, "vevor_2kw": HeaterModel.VEVOR_2KW,
+             "vevor_2kw_v2": HeaterModel.VEVOR_2KW_V2},
             lower=True,
         ),
         cv.Optional(CONF_STANDALONE_MODE, default=False): cv.boolean,

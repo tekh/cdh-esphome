@@ -74,7 +74,11 @@ uart:
 heater_uart:
     update_interval: 5s
     id: heater
-    heater_model: vevor_2kw  # jeabong_8kw (original). Switch to 'vevor_2kw' once the 2kW Vevor profile has been validated on the bench.
+    # vevor_2kw_v2 = 2kW Vevor, EXPERIMENTAL: in HEAT mode the firmware sends the
+    # level you set verbatim (no approach control, no HX-soot pump override).
+    # REVERT (one line, then reflash): 'vevor_2kw' = v1 2kW (firmware modulates
+    # HEAT), 'jeabong_8kw' = the 8kW BDAP heater (real pump-Hz + fan control).
+    heater_model: vevor_2kw_v2
     standalone_mode: true
     operating_voltage: 12V  # or 24V depending on your heater
     temperature_sensor: dht22_temperature  # DHT22 for room temperature in standalone mode
