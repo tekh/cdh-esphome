@@ -414,6 +414,54 @@ X kW" measured in October says nothing about January. Durable instead:
    derate with the same σ formula already used for altitude, instead of
    freezing a curve to one season's air.
 
+## Byte-level RE of the glow / fan slots — full ignition cycle (2026-10-12)
+
+Captured our XMZ-D2 across a complete off → glow-preheat → ignited → running →
+stopping cycle (501 heater frames, raw `<<<` sniff, 1 Hz). Script:
+`scratch/parse_cycle.py`, data `scratch/vevor-cycle-raw.log`.
+
+**Fan voltage — IDENTIFIED: byte 15.** Integer, 0-16. 0 = fan stopped; 8-11 at
+our running speeds; the maximum tracks the unit's own supply rail (ours peaks 11
+of 13.2 V, the reference unit peaked 16 of its 15.5 V). RPM *lags* it — it is the
+commanded drive, not a tach echo:
+
+| b15 | 0 | 1 | 2 | 3 | 4 | 5 | 6 | 7 | 8 | 9 | 10 | 11 |
+|---|---|---|---|---|---|---|---|---|---|---|---|---|
+| median RPM | 1503 | 1507 | 1991 | 1998 | 2504 | 2503 | 2823 | 3204 | 3204 | 3490 | 3506 | 3609 |
+
+**Glow cluster — IDENTIFIED as bytes 24-27, non-zero ONLY while the glow is
+lit.** Two episodes captured, both ramping smoothly and then zeroing:
+
+| episode | duration | peak b24 / b25 / b26 / b27 | state |
+|---|---|---|---|
+| ignition glow | ~103 s | 101 / 93 / 83 / 12 | ignited |
+| post-run glow | ~40 s | 79 / 89 / 78 / 10 | stopping |
+
+- **b27 is the glow-current candidate**: range 4-12, exactly matching the
+  reference unit's glow-current byte (their byte 13: 0-11 A during the same two
+  phases).
+- **b24/b25/b26 ramp together (0→~100)** and are the voltage/temperature
+  candidates; individual assignment is still open (with no amp clamp, they can't
+  be separated by magnitude alone).
+- The reference unit shows the same cluster (b24-27 zero except in states 2 and
+  4) *and* a current value at its byte 13 — so the two revisions expose the same
+  physics in different slots.
+
+**byte 13 on our unit is NOT glow current — our parser is wrong here.** Proof:
+it is 0 through the whole glow-preheat phase (glow definitively on) and non-zero
+(78-128) while running with the glow off. Its distinct values are only
+{0, 78, 88, 98, 108, 118, 128} — a 10-step ladder (equivalently 0,-10..-50 in
+offset-128, or a ×10 fixed-point of an integer 8..13). Quantity unidentified.
+Current parser maps byte 13 → glow current (gated ≤40) → should be replaced by
+the b24-27 cluster + byte 15 fan voltage.
+
+**Other revision drift (ours vs the reference unit):**
+- byte 52-53: glow-phase values 0-410/420 on the reference, always 0 on ours.
+- byte 14: 0x80 constant on ours; 0x00/0x01 (cooling flag) on the reference.
+- bytes 8-9: 00/EE on ours; 03/FB on the reference.
+- byte 23 (pump Hz ×0.1): 1.6 at level 1 on ours; 3.8-4.0 at level 3 on theirs —
+  pump speed *does* move with level on both, more strongly on the reference unit.
+
 ## References
 
 - zatakon / esphome-vevor-heater — working ESPHome component (our TX state machine,
