@@ -192,6 +192,8 @@ void HeaterUart::update() {
             sensor->publish_state(glow_b_value_);
         else if (key == "glow_c")
             sensor->publish_state(glow_c_value_);
+        else if (key == "power_level_actual")
+            sensor->publish_state(power_level_actual_value_);
         else if (key == "desired_temperature")
             sensor->publish_state(desired_temperature_value_);
     }
@@ -443,7 +445,13 @@ void HeaterUart::set_heater_mode(HeaterMode mode) {
         ESP_LOGI(TAG, "Mode On: forcing heater start");
         pending_on_off_command_ = CMD_START;
         heater_on_request_ = true;
-        pump_freq_setting_ = profile_.pump_freq_initial;
+        // Start level on a cold start. Manual-HEAT profiles start at FULL POWER and
+        // ramp down as the room approaches the requested temperature
+        // (thermostat_control()); everything else keeps the ignition-rate default.
+        pump_freq_setting_ = profile_.heat_mode_manual ? profile_.pump_freq_max
+                                                       : profile_.pump_freq_initial;
+        ESP_LOGI(TAG, "Mode On: start level %.1f Hz (%.1f = full power)", pump_freq_setting_,
+                 profile_.pump_freq_max);
         last_pump_adjust_time_ = millis();
         in_standby_ = false;
         in_auto_shutdown_ = false;
@@ -937,11 +945,28 @@ void HeaterUart::thermostat_control() {
             }
         } else if (heater_mode_ == HeaterMode::ON) {
             if (profile_.heat_mode_manual) {
-                // HEAT is user-owned: send the user's level verbatim in stable
-                // combustion. No approach control, no ramp-down - the user is
-                // the loop. (The ignition warm-up ramp in state 4 still ran
-                // above; protection overrides stay below.)
-                new_freq = pump_freq_user_request_;
+                // HEAT (v2): cold start at full power, then ramp DOWN as the room
+                // approaches the requested temperature. Above the request the ramp
+                // keeps descending to the profile floor (anti-overshoot); in the
+                // approach band it descends toward the user's dial value, which is
+                // the level the burn settles at. The HX-soot increase stays disabled
+                // here (the user owns the fine tuning); the HX-too-hot decrease and
+                // the HX-critical stop still apply below.
+                float approach_temp = target_temp - approach_threshold_;
+                if (room_temp < approach_temp) {
+                    // still well below the request: hold full power
+                    new_freq = profile_.pump_freq_max;
+                } else if (room_temp < target_temp) {
+                    // approaching the request: step down toward the user's level
+                    float step = profile_.pump_freq_step;
+                    new_freq = std::max(pump_freq_user_request_, pump_freq_setting_ - step);
+                } else {
+                    // at/above the request: keep stepping down, all the way to the floor
+                    float overshoot = room_temp - target_temp;
+                    float multiplier = (overshoot >= 1.0f) ? 3.0f : (overshoot >= 0.5f) ? 2.0f : 1.0f;
+                    float step = profile_.pump_freq_step * multiplier;
+                    new_freq = std::max(profile_.pump_freq_min, pump_freq_setting_ - step);
+                }
             } else {
             // HEAT mode: Continuous heat with approach control, no auto-shutdown
             // Ramp pump to minimum when approaching target, but keep heater running
@@ -1267,6 +1292,11 @@ void HeaterUart::parse_vevor_rx_frame(const uint8_t *frame, size_t length) {
     glow_a_value_ = frame[24];
     glow_b_value_ = frame[25];
     glow_c_value_ = frame[26];
+
+    // Byte 6: the level the ECM is actually running at. This is the feedback for
+    // the HEAT start-at-max-then-ramp-down behaviour: the Power Level *dial* is the
+    // user's request, this sensor is what the heater is doing.
+    power_level_actual_value_ = frame[6];
 
     heat_exchanger_temp_value_ = static_cast<int16_t>((frame[16] << 8) | frame[17]) * 0.1f;  // int16, x10
     pump_frequency_value_ = frame[23] * 0.1f;                                          // Hz x10

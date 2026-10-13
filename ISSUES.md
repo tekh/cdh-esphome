@@ -65,14 +65,29 @@ Status markers: **OPEN** (actionable) · **PARKED** (deliberately deferred) ·
    is deliberately left undecoded: pointing it at one of the glow-cluster bytes
    would be a guess dressed as a measurement. Closes with item 5's open half.
 
-7. **OPEN — level-commanded profiles boot to a mid-range level, not minimum.**
-   `pump_freq_user_request_` initialises to 1.6 Hz (a v1-era default), which on the
-   level facade is **level 6** — so the Power Level dial reads 6 after every reboot,
-   and a HEAT start before anyone touches the dial burns at level 6. For a
-   level-commanded profile a boot default of level 1 (minimum burn) is the honest
-   default; it is a one-line change (initialise the user request to
-   `pump_freq_min` when `has_power_level_control`). Closes when: the default is
-   changed and verified, or the current default is declared intentional.
+7. **DECIDED + IMPLEMENTED 2026-10-12 — HEAT starts at full power, then ramps down.**
+   Requirement (user): "starting from off, changing to heat should have a default of 10
+   until the ramp down (close to temperature request)". Implemented on manual-HEAT
+   profiles:
+   - the ON transition commands **full power** (`pump_freq_max` = level 10) instead of
+     the ignition-rate default; non-manual profiles (v1, 8kW) keep `pump_freq_initial`
+   - state 4 (warm-up) holds full power by design
+   - in state 5: below `target - approach_threshold` → hold full power; in the approach
+     band → step down toward the **user's dial value** (the level the burn settles at);
+     at/above the request → keep stepping down to the **profile floor** (anti-overshoot)
+   - the HX-soot increase stays disabled in v2 HEAT (user owns the fine tuning); the
+     HX-too-hot decrease and the HX-critical stop still apply
+   Verified live: from Off → Heat the level read 10 through ignition, then stepped
+   10 → 1 within ~35 s of entering Running with the room (21.4 °C) above the request
+   (20 °C), no errors.
+   **New sensor:** `sensor.lab_heater_power_level_actual` (Vevor RX byte 6) reports the
+   level the ECM is running at, so the ramp is observable. The Power Level *dial* is the
+   request; the sensor is reality. On BDAP the level byte is not decoded, so it stays 0
+   there (8kW parked, see items 1-4).
+   **Open sub-question:** the approach-band descent floors at the dial value, which is
+   currently the stale 1.6 Hz default (reads as level 6). If the desired settle level is
+   lower, either set the dial or change the default; flag if the descent should instead
+   always run to the profile floor.
 
 8. **OPEN — `hx_temp_low = 145` sits above the level-1 equilibrium.**
    Measured: at level 1 this room equilibrates the HX around **154 °C**, i.e. the

@@ -37,6 +37,10 @@ SENSORS = {
     "glow_a": ("Glow A (unverified)", UNIT_EMPTY, ICON_EMPTY),
     "glow_b": ("Glow B (unverified)", UNIT_EMPTY, ICON_EMPTY),
     "glow_c": ("Glow C (unverified)", UNIT_EMPTY, ICON_EMPTY),
+    # Level the heater reports it is actually running at (Vevor RX byte 6). Read-only
+    # feedback: the Power Level dial is the request, this is what the ECM is doing -
+    # which is how you watch the HEAT start-at-max -> ramp-down happen.
+    "power_level_actual": ("Power Level Actual", UNIT_EMPTY, ICON_EMPTY),
 }
 
 CONFIG_SCHEMA = cv.Schema(

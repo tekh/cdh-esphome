@@ -230,6 +230,9 @@ class HeaterUart : public PollingComponent, public uart::UARTDevice {
   float glow_c_value_ = 0;
   float pump_frequency_value_ = 0;
   float fan_voltage_value_ = 0;
+  // Level the ECM reports it is running at (Vevor RX byte 6). Feedback for the
+  // HEAT start-at-max/ramp-down behaviour; the Power Level dial is the request.
+  int power_level_actual_value_ = 0;
   int desired_temperature_value_ = 0;
   int error_code_value_ = 0;
   int run_state_value_ = 0;

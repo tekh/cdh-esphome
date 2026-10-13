@@ -357,6 +357,22 @@ Bench-verified on the real unit (HX started cold, ~33 °C):
 | pump number entity | held 0.5 through the state-4 ramp → sync fix works (no clobber) |
 | overrides | zero "HX soot safety override" lines in state 5 |
 
+### HEAT start + ramp-down (v2, implemented 2026-10-12)
+
+Requirement: "starting from off, changing to heat should have a default of 10 until the
+ramp down (close to temperature request)". On manual-HEAT profiles:
+
+- Off → Heat commands **full power** (level 10); the state-4 warm-up holds it there.
+- In state 5: below `target − approach_threshold` → hold full power; inside the approach
+  band → step down toward the **user's dial value** (the settle level); at/above the
+  request → keep stepping down to the **profile floor** (anti-overshoot).
+- The HX-soot increase stays off in v2 HEAT; the HX-too-hot decrease and HX-critical
+  stop still apply.
+- `sensor.lab_heater_power_level_actual` (RX byte 6) shows the level the ECM is running
+  at; the Power Level dial is the request. Bench-verified: level 10 held through
+  ignition, then 10 → 1 in ~35 s once Running with the room (21.4 °C) above the request
+  (20 °C).
+
 ### Control surface on v2 (one fuel dial per heater)
 
 HEAT-mode dials for the 2kW device: **target temperature + power level** — and

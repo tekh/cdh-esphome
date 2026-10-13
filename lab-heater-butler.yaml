@@ -161,6 +161,12 @@ sensor:
       name: "Glow C (unverified)"
       web_server:
         sorting_group_id: sorting_group_sensors
+    # What the heater reports it is running at, vs the Power Level dial (your
+    # request). Watch this to see the HEAT start-at-max then ramp down.
+    power_level_actual:
+      name: "Power Level Actual"
+      web_server:
+        sorting_group_id: sorting_group_sensors
     desired_temperature:
       name: "Desired Temperature"
       web_server:
