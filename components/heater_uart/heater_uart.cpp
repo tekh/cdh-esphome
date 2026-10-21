@@ -417,7 +417,19 @@ void HeaterUart::set_heater_mode(HeaterMode mode) {
         float room_temp = current_temperature_value_;
         float threshold = desired_temp_setting_ - auto_shutdown_hysteresis_;
 
-        if (room_temp < threshold) {
+        if (is_room_sensor_stale()) {
+            // No blind starts: the room temperature is stale (sensor dead or
+            // never read). Park in standby; the thermostat's standby check
+            // starts the heater once fresh readings arrive. If the heater is
+            // running, stop it (burning on blind data).
+            ESP_LOGW(TAG, "Mode Auto: room sensor stale - no blind start, parking in standby");
+            in_standby_ = true;
+            if (on_off_value_ || heater_on_request_) {
+                pending_on_off_command_ = CMD_STOP;
+                heater_on_request_ = false;
+                in_cooldown_ = true;
+            }
+        } else if (room_temp < threshold) {
             // Cold enough - start heater
             ESP_LOGI(TAG, "Mode Auto: room %.1f°C < %.1f°C threshold, starting heater",
                      room_temp, threshold);
@@ -828,10 +840,44 @@ void HeaterUart::parse_rx_frame(const uint8_t *frame, size_t length) {
     thermostat_control();
 }
 
+bool HeaterUart::is_room_sensor_stale() const {
+    if (!standalone_mode_ || external_temp_sensor_ == nullptr) return false;
+    if (!std::isnan(external_temp_sensor_->state)) return false;
+    if (last_valid_room_temp_time_ == 0) return true;  // no valid reading since boot
+    return (millis() - last_valid_room_temp_time_) > ROOM_SENSOR_TIMEOUT_MS;
+}
+
 void HeaterUart::thermostat_control() {
     float hx_temp = heat_exchanger_temp_value_;
     float room_temp = current_temperature_value_;  // external sensor, refreshed at TX time
     float target_temp = static_cast<float>(desired_temp_setting_);
+
+    // === ROOM-SENSOR HEALTH GATE (standalone mode) ===
+    // While the external room sensor is producing fresh readings, keep the
+    // timestamp. If it has not produced a valid (non-NaN) reading for >10 min,
+    // the thermostat is blind: the last known value could hide an overheat
+    // (the 26C ambient limit reads the same stale value) and a stale cold value
+    // could trigger a blind start. Stop a running heater and block all
+    // auto-start/stop logic until fresh data arrives. (User requirement,
+    // 2026-10-20: DHT22 in warning state > 10 min -> heater off.)
+    if (standalone_mode_ && external_temp_sensor_ != nullptr) {
+        if (!std::isnan(external_temp_sensor_->state)) {
+            last_valid_room_temp_time_ = millis();
+        } else if (is_room_sensor_stale()) {
+            if (on_off_value_ || heater_on_request_) {
+                ESP_LOGW(TAG, "Room sensor stale > %.0f min (last valid %.1fC): stopping heater",
+                         ROOM_SENSOR_TIMEOUT_MS / 60000.0f, current_temperature_value_);
+                pending_on_off_command_ = CMD_STOP;
+                heater_on_request_ = false;
+                in_cooldown_ = true;
+                in_auto_shutdown_ = false;
+                if (heater_mode_ == HeaterMode::AUTO) {
+                    in_standby_ = true;  // re-arm auto-restart for when the sensor recovers
+                }
+            }
+            return;  // block standby/auto-restart/auto-shutdown until fresh readings
+        }
+    }
 
     // === STANDBY CHECK (AUTO mode) ===
     // If in standby, check if temperature has dropped enough to start

@@ -113,6 +113,11 @@ class HeaterUart : public PollingComponent, public uart::UARTDevice {
   // State accessors
   bool get_on_off_state() const { return on_off_value_; }
   float get_desired_temperature() const { return desired_temperature_value_; }
+  // Room-sensor health (standalone mode): true when the external room sensor has
+  // not produced a valid (non-NaN) reading for >10 minutes. The thermostat must
+  // not burn on blind data (a stale last value hides an overheat, and a stale
+  // cold value could trigger a blind start). 2026-10-20, user requirement.
+  bool is_room_sensor_stale() const;
   float get_current_temperature() const { return current_temperature_value_; }
   float get_pump_frequency_setting() const { return pump_freq_setting_; }
   bool is_standalone_mode() const { return standalone_mode_; }
@@ -234,6 +239,8 @@ class HeaterUart : public PollingComponent, public uart::UARTDevice {
   // HEAT start-at-max/ramp-down behaviour; the Power Level dial is the request.
   int power_level_actual_value_ = 0;
   float desired_temperature_value_ = 0.0f;  // 2026-10-20: int -> float so 0.5C setpoints (e.g. 19.5) aren't truncated in the number/sensor display; the thermostat logic already used the float desired_temp_setting_
+  uint32_t last_valid_room_temp_time_ = 0;  // millis() of the last valid (non-NaN) external room-sensor reading; 0 = none yet (treated as stale after 10 min)
+  static const uint32_t ROOM_SENSOR_TIMEOUT_MS = 10 * 60 * 1000;  // 10 min without a valid room reading = sensor fault
   int error_code_value_ = 0;
   int run_state_value_ = 0;
   bool on_off_value_ = false;
