@@ -176,13 +176,41 @@ Re-select Auto to resume thermostat operation.
 
 ### Room-sensor fault cutoff (standalone mode)
 
-If the external room sensor (DHT22) produces no valid reading for **10
-minutes**, the thermostat is considered blind: a running heater is **stopped
-immediately (all modes)** and no auto-start can occur until fresh readings
-arrive (2026-10-20). A stale last value could otherwise hide an overheat — the
-26°C ambient limit reads that same stale value — and a stale cold value could
-trigger a blind start. In Auto mode the heater parks in standby during the
-fault and resumes normal thermostat behaviour once the sensor recovers.
+If the external room sensor (DHT22) produces no **accepted** reading for
+**10 minutes**, the thermostat is considered blind: a running heater is
+**stopped immediately (all modes)** and no auto-start can occur until fresh
+readings arrive (2026-10-20). A stale last value could otherwise hide an
+overheat — the 26°C ambient limit reads that same stale value — and a stale
+cold value could trigger a blind start. In Auto mode the heater parks in
+standby during the fault and resumes normal thermostat behaviour once the
+sensor recovers. Since 2026-10-21 the timer is refreshed only by readings
+that pass the glitch guard below, so a sensor that is dead *or* stuck
+emitting garbage is declared blind.
+
+### Room-sensor glitch guard (standalone mode)
+
+A DHT22 right after a failed read can emit a sample that is valid but
+garbage (observed 2026-10-21: 18.4 °C against a 19.2 °C trend, which tripped
+a false AUTO start). Every room-sensor sample now passes a physics guard
+before the thermostat or the TX frames see it (2026-10-21):
+
+- NaN / warning readings are rejected outright.
+- A non-NaN reading more than **0.5 °C** from the last accepted reading
+  (the observed field rate is ~0.3 °C/min, so this is 10× headroom per 10 s
+  sensor interval) is treated as a glitch: it is rejected and the last
+  trusted value is held.
+- Rejected readings do **not** refresh the 10-minute fault-cutoff timer
+  above, so a persistently bad sensor is declared blind just like a dead one.
+
+**Boot baseline.** After a reboot, no single sample may become the reference:
+the first 3 non-NaN readings (at least 5 s apart, so each is a distinct
+10-s DHT22 conversion — ~30 s total) must agree within **2.0 °C**, and the
+baseline is the **median** of the three. Until then the sensor counts as
+stale, so AUTO keeps the heater off — the safe state right after a reboot,
+when the relay has just de-energized. A window that fails the spread check is
+discarded and retried with the next three readings. A log line
+(`Room temp baseline … established (3-sample consensus, …)`) appears ~30 s
+after boot when the baseline is set.
 
 ### Half-degree setpoints
 

@@ -140,17 +140,61 @@ Status markers: **OPEN** (actionable) · **PARKED** (deliberately deferred) ·
     `float`; the getter follows. Wire unchanged: Vevor TX byte 4 stays integer
     °C (rounded), per protocol convention.
 
-14. **IMPLEMENTED 2026-10-20 (pending flash) — room-sensor fault cutoff.**
+14. **DEPLOYED 2026-10-21 — room-sensor fault cutoff.**
     Requirement (user): DHT22 in warning state > 10 min -> heater off. A dead
     sensor leaves the thermostat on a stale last value (the NaN guard holds the
     last good reading), and the 26C ambient limit reads that same stale value —
-    i.e. unmonitored burn. Now: no valid (non-NaN) room reading for 10 min ->
-    a running heater stops immediately (all modes), all auto-start paths are
+    i.e. unmonitored burn. Now: no *accepted* room reading for 10 min -> a
+    running heater stops immediately (all modes), all auto-start paths are
     blocked, and Auto mode parks in standby so it resumes normally on recovery.
-    Also blocks blind starts from a stale cold value. Scope note: the gate acts
-    only on sustained >10 min outages — a single glitch sample (like the 18.4C
-    DHT22 reading on 2026-10-21 that legitimately tripped a standby->start)
-    still drives the thermostat, by design.
+    Also blocks blind starts from a stale cold value. Deployed 2026-10-21
+    (rebuild + reflash), live-verified via HA entity freshness (room temp
+    last_updated 02:36:01 UTC at a 02:37:02 UTC check, all heater entities
+    available). Scope note (superseded by item 15): staleness originally counted
+    non-NaN readings only; the 2026-10-21 glitch guard extended it so rejected
+    samples also fail to refresh the timer.
+
+15. **FIXED 2026-10-21 — DHT22 glitch samples drove the thermostat (physics guard).**
+    Field incident: an 18.4C reading against a 19.2C trend (a valid-but-garbage
+    DHT22 sample after a failed read) tripped a false standby->start in AUTO
+    mode. Now every room-sensor sample passes `refresh_room_temperature()` —
+    the single ingestion point on the standalone TX path (1 Hz) — before the
+    thermostat or the TX frames see it:
+    - NaN / warning readings are rejected outright.
+    - A non-NaN sample more than `ROOM_TEMP_MAX_STEP` (0.5C) from the last
+      accepted value is a glitch: rejected, the last trusted value is held, and
+      the staleness timer is deliberately NOT refreshed (observed field rate
+      ~0.3C/min, so 0.5C per 10s sensor interval is 10x headroom).
+    - Rejections log at most one warning per 60 s; the guard is otherwise
+      passive — it can only be observed when a real glitch arrives.
+    Consequence for item 14: a DHT22 that is dead (NaN) *or* stuck emitting
+    garbage now both trip the 10-minute fault cutoff. Compile-verified
+    (COMPILE_EXIT=0) and deployed 2026-10-21; live-verified via HA entity
+    freshness (same check as item 14).
+
+16. **FIXED 2026-10-21 (pending flash) — boot baseline: one first sample could
+    become the guard reference (3-sample consensus).**
+    Gap in the item 15 design: the first valid sample after boot was accepted
+    unconditionally (no baseline to compare). A DHT22 misfiring on its first
+    conversion after power-on would set the reference for every later step
+    check. An HX-temperature cross-reference was evaluated and rejected: the
+    HX floor is ~59C (even in standby), leaving no plausibility headroom for a
+    room-temp cross-check (user observation). Fix (user-specified): the first
+    `ROOM_TEMP_BOOT_SAMPLES` (3) non-NaN samples, at least
+    `ROOM_TEMP_BOOT_MIN_SPACING_MS` (5 s) apart so each is a distinct 10-s DHT22
+    conversion (~30 s total), must agree within `ROOM_TEMP_BOOT_MAX_SPREAD`
+    (2.0C); the baseline is the **median** of the three (a mild outlier inside
+    the spread is outvoted). A failed window is discarded and retried with the
+    next three samples (self-correcting; persistent failure still hits the
+    10-minute cutoff). Rationale: physical drift over 30 s is ~0.05C, so a
+    2.0C spread is ~40x the real signal — a false reject is implausible, and
+    its cost would only be 30 extra seconds in the safe state. During the
+    window `last_valid_room_temp_time_` stays 0, so `is_room_sensor_stale()`
+    is true and AUTO keeps the heater off — the safe state right after a
+    reboot, when the relay has just de-energized. Residual known limitation:
+    a *consistent* bad value (e.g. stuck 0.0) passes consensus — sampling
+    alone cannot distinguish it from a true value, and no cross-reference is
+    available. Compile-verified (COMPILE_EXIT=0, flash 49.9%); pending flash.
 
 ---
 
