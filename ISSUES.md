@@ -118,6 +118,40 @@ Status markers: **OPEN** (actionable) · **PARKED** (deliberately deferred) ·
     low. Closes when: the key moves to `secrets.yaml` and/or is rotated on both
     device and HA.
 
+12. **CHANGED 2026-10-20 — Auto-mode band: shutdown at the setpoint, re-engage at target-1.0.**
+    Field symptom "heater stays on": `auto_shutdown_overshoot: 0.5` required the
+    room to exceed target+0.5 at min pump before shutting off; when the room's
+    equilibrium at min power sat below that (observed 18.3-18.4C vs the 18.5C
+    threshold on 2026-10-20), the heater idled at min level indefinitely. Now
+    `overshoot: 0.0` (shut off as soon as the room crosses the setpoint at min
+    pump) and `hysteresis: 1.0` (re-engage at target-1.0, user-chosen).
+    Field-verified 2026-10-21: standby->start fired at a 18.4C reading against
+    the 18.5C threshold (target 19.5 - 1.0) — that same firing also proved the
+    internal target was the float 19.5 despite the display showing 19.0 (see
+    item 13). Shutdown half of the cycle at 19.5 was still in progress.
+    (Separately: the two "stays on" runs on the evening of 2026-10-20 were in
+    HEAT mode, which by design never auto-shuts off on the v2 profile — v2 HEAT
+    is user-owned level. The AUTO-mode margin was the second, real bug.)
+
+13. **FIXED 2026-10-20 — half-degree setpoints truncated in the display.**
+    `desired_temperature_value_` was an `int`, so a 19.5 request displayed as
+    19.0 (number entity + desired_temperature sensor) while the thermostat
+    already ran on the exact float `desired_temp_setting_`. Member is now
+    `float`; the getter follows. Wire unchanged: Vevor TX byte 4 stays integer
+    °C (rounded), per protocol convention.
+
+14. **IMPLEMENTED 2026-10-20 (pending flash) — room-sensor fault cutoff.**
+    Requirement (user): DHT22 in warning state > 10 min -> heater off. A dead
+    sensor leaves the thermostat on a stale last value (the NaN guard holds the
+    last good reading), and the 26C ambient limit reads that same stale value —
+    i.e. unmonitored burn. Now: no valid (non-NaN) room reading for 10 min ->
+    a running heater stops immediately (all modes), all auto-start paths are
+    blocked, and Auto mode parks in standby so it resumes normally on recovery.
+    Also blocks blind starts from a stale cold value. Scope note: the gate acts
+    only on sustained >10 min outages — a single glitch sample (like the 18.4C
+    DHT22 reading on 2026-10-21 that legitimately tripped a standby->start)
+    still drives the thermostat, by design.
+
 ---
 
 ## Reference

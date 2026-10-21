@@ -136,7 +136,7 @@ When using standalone mode with the mode select set to "Auto", the component pro
 
 1. **Heating Phase**: When room temperature is below target, the heater starts and increases heat output
 2. **Approach Control**: As temperature approaches the target, heating rate automatically slows to prevent overshoot
-3. **Auto-Shutdown**: When target temperature is reached, the heater shuts down and enters cooldown mode
+3. **Auto-Shutdown**: When the room crosses target + `auto_shutdown_overshoot` with the pump at its minimum, the heater shuts down and enters cooldown mode (with the lab setting of 0.0 this is the setpoint itself)
 4. **Standby Monitoring**: While off, the component continuously monitors room temperature
 5. **Auto-Restart**: When temperature drops below the restart threshold, the heater automatically starts again
 
@@ -144,18 +144,18 @@ When using standalone mode with the mode select set to "Auto", the component pro
 
 Fine-tune the Auto mode behavior with these parameters:
 
-- `auto_shutdown_overshoot` (default: 0.5°C): Temperature above target before auto-shutdown triggers
-- `auto_shutdown_hysteresis` (default: 1.5°C): Temperature drop needed before auto-restart
-- `approach_threshold` (default: 2.0°C): Distance from target when approach control begins
+- `auto_shutdown_overshoot` (schema default: 0.5°C, lab-heater: 0.0): Temperature above target before auto-shutdown triggers. 0.0 = shut off as soon as the room crosses the setpoint (2026-10-20: with 0.5 the heater idled at min level indefinitely when the room's min-output equilibrium sat below target+0.5)
+- `auto_shutdown_hysteresis` (schema default: 1.5°C, lab-heater: 1.0): Temperature drop below target needed before auto-restart (the re-engage offset)
+- `approach_threshold` (default: 1.0°C): Distance from target when approach control begins
 - `ambient_heat_limit` (default: 26.0°C): HEAT mode safety limit - forces shutdown if room > X°C (range: -40 to 80°C)
 
 Example configuration:
 ```yaml
 heater_uart:
   standalone_mode: true
-  auto_shutdown_overshoot: 0.5
-  auto_shutdown_hysteresis: 1.5
-  approach_threshold: 2.0
+  auto_shutdown_overshoot: 0.0
+  auto_shutdown_hysteresis: 1.0
+  approach_threshold: 1.0
   ambient_heat_limit: 26.0  # HEAT mode safety limit (°C)
 ```
 
@@ -166,6 +166,31 @@ The mode select entity provides three operating modes:
 - **Off**: Heater is forced off (enters cooldown if running)
 - **Auto**: Thermostat-controlled operation with auto-shutdown and auto-restart
 - **On**: Heater is forced on, bypassing thermostat control. Safety limits still apply including the ambient heat limit.
+
+### State after reboot
+
+Settings are **not persistent**: after any reboot (reflash or power loss) the
+mode select resets to **Off** and the target temperature to **19.0**
+(component defaults, 2026-10-20; the target default was 22.0 before).
+Re-select Auto to resume thermostat operation.
+
+### Room-sensor fault cutoff (standalone mode)
+
+If the external room sensor (DHT22) produces no valid reading for **10
+minutes**, the thermostat is considered blind: a running heater is **stopped
+immediately (all modes)** and no auto-start can occur until fresh readings
+arrive (2026-10-20). A stale last value could otherwise hide an overheat — the
+26°C ambient limit reads that same stale value — and a stale cold value could
+trigger a blind start. In Auto mode the heater parks in standby during the
+fault and resumes normal thermostat behaviour once the sensor recovers.
+
+### Half-degree setpoints
+
+The target temperature accepts 0.5°C steps. The thermostat logic runs on the
+exact float value (e.g. 19.5) and the display shows it exactly (fixed
+2026-10-20: the display previously truncated 19.5 to 19.0). The Vevor TX frame
+carries the **rounded integer** °C in byte 4 (protocol constraint); the
+heating behaviour follows the exact float target.
 
 ## Getting Started
 
@@ -197,9 +222,9 @@ heater_uart:
   standalone_mode: true
   operating_voltage: "12V"  # or "24V" depending on your heater
   altitude: 750  # meters above sea level
-  auto_shutdown_overshoot: 0.5  # °C above target before shutdown
-  auto_shutdown_hysteresis: 1.5  # °C drop before auto-restart
-  approach_threshold: 2.0  # °C from target to start slowing down
+  auto_shutdown_overshoot: 0.0  # °C above target before shutdown (0.0 = at the setpoint)
+  auto_shutdown_hysteresis: 1.0  # °C drop below target before auto-restart
+  approach_threshold: 1.0  # °C from target to start slowing down
   temperature_sensor: room_temp  # External sensor (recommended)
 
 sensor:
@@ -284,7 +309,7 @@ button:
 - Use single-wire half-duplex UART: `tx_pin` and `rx_pin` must be the **same GPIO pin**.
 - External temperature sensor is highly recommended for accurate room temperature control.
 - Without an external sensor, the component will use heat exchanger temperature as a fallback.
-- In Auto mode, the heater will automatically manage itself between `desired_temperature ± hysteresis`.
+- In Auto mode, the heater will automatically manage itself in the band `desired_temperature - hysteresis` (auto-restart) to `desired_temperature + overshoot` (auto-shutdown; with the lab setting of 0.0 the band is [target-1.0, target]).
 - In HEAT mode (On), the ambient heat limit provides additional safety by forcing shutdown if room temperature exceeds the configured threshold.
 
 **Mode Select Usage:**
