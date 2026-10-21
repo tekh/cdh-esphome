@@ -193,7 +193,7 @@ class HeaterUart : public PollingComponent, public uart::UARTDevice {
   bool standalone_mode_ = false;
   uint8_t operating_voltage_ = VOLTAGE_12V;
   uint16_t altitude_ = 750;              // Altitude in metres (affects combustion)
-  float desired_temp_setting_ = 22.0f;   // Our desired temperature (for standalone)
+  float desired_temp_setting_ = 19.0f;  // Our desired temperature (for standalone). 2026-10-20: default 22.0 -> 19.0 (post-reboot state; mode default is already OFF)
   float temp_backoff_offset_ = 0.5f;     // Start ramping down this many °C before target
   bool heater_on_request_ = false;       // Whether we want heater on
   uint8_t pending_on_off_command_ = CMD_NO_CHANGE;  // Pending on/off command
