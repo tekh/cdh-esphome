@@ -112,7 +112,7 @@ class HeaterUart : public PollingComponent, public uart::UARTDevice {
 
   // State accessors
   bool get_on_off_state() const { return on_off_value_; }
-  int get_desired_temperature() const { return desired_temperature_value_; }
+  float get_desired_temperature() const { return desired_temperature_value_; }
   float get_current_temperature() const { return current_temperature_value_; }
   float get_pump_frequency_setting() const { return pump_freq_setting_; }
   bool is_standalone_mode() const { return standalone_mode_; }
@@ -233,7 +233,7 @@ class HeaterUart : public PollingComponent, public uart::UARTDevice {
   // Level the ECM reports it is running at (Vevor RX byte 6). Feedback for the
   // HEAT start-at-max/ramp-down behaviour; the Power Level dial is the request.
   int power_level_actual_value_ = 0;
-  int desired_temperature_value_ = 0;
+  float desired_temperature_value_ = 0.0f;  // 2026-10-20: int -> float so 0.5C setpoints (e.g. 19.5) aren't truncated in the number/sensor display; the thermostat logic already used the float desired_temp_setting_
   int error_code_value_ = 0;
   int run_state_value_ = 0;
   bool on_off_value_ = false;
