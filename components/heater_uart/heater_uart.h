@@ -118,6 +118,13 @@ class HeaterUart : public PollingComponent, public uart::UARTDevice {
   // not burn on blind data (a stale last value hides an overheat, and a stale
   // cold value could trigger a blind start). 2026-10-20, user requirement.
   bool is_room_sensor_stale() const;
+  // Accept a fresh external room-sensor reading only if it is valid (non-NaN)
+  // AND physically plausible (within ROOM_TEMP_MAX_STEP of the last accepted
+  // value per sensor interval). A DHT22 right after a failed read can emit a
+  // garbage-but-valid sample (2026-10-21: 18.4C against a 19.2C trend, which
+  // tripped a false standby->start); such samples are rejected and the last
+  // trusted value is held. Returns true if the reading was accepted.
+  bool refresh_room_temperature();
   float get_current_temperature() const { return current_temperature_value_; }
   float get_pump_frequency_setting() const { return pump_freq_setting_; }
   bool is_standalone_mode() const { return standalone_mode_; }
@@ -239,8 +246,10 @@ class HeaterUart : public PollingComponent, public uart::UARTDevice {
   // HEAT start-at-max/ramp-down behaviour; the Power Level dial is the request.
   int power_level_actual_value_ = 0;
   float desired_temperature_value_ = 0.0f;  // 2026-10-20: int -> float so 0.5C setpoints (e.g. 19.5) aren't truncated in the number/sensor display; the thermostat logic already used the float desired_temp_setting_
-  uint32_t last_valid_room_temp_time_ = 0;  // millis() of the last valid (non-NaN) external room-sensor reading; 0 = none yet (treated as stale after 10 min)
-  static const uint32_t ROOM_SENSOR_TIMEOUT_MS = 10 * 60 * 1000;  // 10 min without a valid room reading = sensor fault
+  uint32_t last_valid_room_temp_time_ = 0;  // millis() of the last ACCEPTED room-sensor reading; 0 = none yet (treated as stale after 10 min)
+  static const uint32_t ROOM_SENSOR_TIMEOUT_MS = 10 * 60 * 1000;  // 10 min without an accepted room reading = sensor fault
+  static constexpr float ROOM_TEMP_MAX_STEP = 0.5f;  // max plausible room-temp change per 10s sensor interval (observed field rate ~0.3C/min); larger jumps are DHT22 glitch samples
+  bool room_temp_accepted_ever_ = false;  // first valid reading is always accepted (no baseline to compare)
   int error_code_value_ = 0;
   int run_state_value_ = 0;
   bool on_off_value_ = false;

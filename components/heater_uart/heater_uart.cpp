@@ -611,11 +611,11 @@ void HeaterUart::build_tx_frame(uint8_t *frame, uint8_t command) {
     frame[2] = command;
 
     // Byte 3: Current temperature
-    // In standalone mode, use external temperature sensor if available
-    if (external_temp_sensor_ != nullptr && !std::isnan(external_temp_sensor_->state)) {
-        frame[3] = static_cast<uint8_t>(external_temp_sensor_->state);
-        current_temperature_value_ = external_temp_sensor_->state;
-    } else if (current_temperature_value_ > 0) {
+    // In standalone mode, use the physics-guarded external room-temperature
+    // reading (refresh_room_temperature rejects NaN and implausible DHT22
+    // glitch samples and holds the last trusted value).
+    refresh_room_temperature();
+    if (current_temperature_value_ > 0) {
         frame[3] = static_cast<uint8_t>(current_temperature_value_);
     } else {
         frame[3] = static_cast<uint8_t>(std::round(desired_temp_setting_));  // Fallback if no reading yet
@@ -840,10 +840,54 @@ void HeaterUart::parse_rx_frame(const uint8_t *frame, size_t length) {
     thermostat_control();
 }
 
+// Physics guard for the external room sensor (DHT22, standalone mode).
+// A DHT22 right after a failed read can emit a sample that is valid but
+// garbage (2026-10-21: 18.4C against a 19.2C trend, which tripped a false
+// standby->start in AUTO mode). Such samples must not be acted upon:
+//   - NaN / warning readings are rejected outright.
+//   - A non-NaN reading more than ROOM_TEMP_MAX_STEP away from the last
+//     accepted value is a glitch sample: reject it, hold the last trusted
+//     value, and do NOT refresh the staleness timestamp (observed field
+//     rate ~0.3C/min, so 0.5C per 10 s sensor interval is 10x headroom).
+//   - Accepted readings refresh last_valid_room_temp_time_, so a DHT22 that
+//     is dead or persistently implausible is declared blind after
+//     ROOM_SENSOR_TIMEOUT_MS and the thermostat stops the heater.
+bool HeaterUart::refresh_room_temperature() {
+    if (external_temp_sensor_ == nullptr) return false;
+    const float sample = external_temp_sensor_->state;
+    if (std::isnan(sample)) return false;
+
+    if (!room_temp_accepted_ever_) {
+        // First valid reading: no baseline to compare yet, accept it.
+        room_temp_accepted_ever_ = true;
+        current_temperature_value_ = sample;
+        last_valid_room_temp_time_ = millis();
+        return true;
+    }
+
+    if (std::abs(sample - current_temperature_value_) > ROOM_TEMP_MAX_STEP) {
+        // Implausible jump: DHT22 glitch sample. Hold the last trusted value
+        // and deliberately do NOT refresh last_valid_room_temp_time_.
+        static uint32_t last_reject_log = 0;  // loop-task context, single instance
+        if (millis() - last_reject_log >= 60000) {
+            last_reject_log = millis();
+            ESP_LOGW(TAG, "Room sensor glitch sample %.1fC rejected (last accepted %.1fC, max step %.1fC/interval): holding last trusted value",
+                     sample, current_temperature_value_, ROOM_TEMP_MAX_STEP);
+        }
+        return false;
+    }
+
+    current_temperature_value_ = sample;
+    last_valid_room_temp_time_ = millis();
+    return true;
+}
+
 bool HeaterUart::is_room_sensor_stale() const {
     if (!standalone_mode_ || external_temp_sensor_ == nullptr) return false;
-    if (!std::isnan(external_temp_sensor_->state)) return false;
-    if (last_valid_room_temp_time_ == 0) return true;  // no valid reading since boot
+    // Staleness is defined on ACCEPTED readings (refresh_room_temperature):
+    // NaN and implausible samples do not refresh the timer, so a sensor that
+    // is dead or stuck emitting garbage is blind after the timeout.
+    if (last_valid_room_temp_time_ == 0) return true;  // no accepted reading since boot
     return (millis() - last_valid_room_temp_time_) > ROOM_SENSOR_TIMEOUT_MS;
 }
 
@@ -853,30 +897,29 @@ void HeaterUart::thermostat_control() {
     float target_temp = static_cast<float>(desired_temp_setting_);
 
     // === ROOM-SENSOR HEALTH GATE (standalone mode) ===
-    // While the external room sensor is producing fresh readings, keep the
-    // timestamp. If it has not produced a valid (non-NaN) reading for >10 min,
-    // the thermostat is blind: the last known value could hide an overheat
-    // (the 26C ambient limit reads the same stale value) and a stale cold value
-    // could trigger a blind start. Stop a running heater and block all
-    // auto-start/stop logic until fresh data arrives. (User requirement,
-    // 2026-10-20: DHT22 in warning state > 10 min -> heater off.)
-    if (standalone_mode_ && external_temp_sensor_ != nullptr) {
-        if (!std::isnan(external_temp_sensor_->state)) {
-            last_valid_room_temp_time_ = millis();
-        } else if (is_room_sensor_stale()) {
-            if (on_off_value_ || heater_on_request_) {
-                ESP_LOGW(TAG, "Room sensor stale > %.0f min (last valid %.1fC): stopping heater",
-                         ROOM_SENSOR_TIMEOUT_MS / 60000.0f, current_temperature_value_);
-                pending_on_off_command_ = CMD_STOP;
-                heater_on_request_ = false;
-                in_cooldown_ = true;
-                in_auto_shutdown_ = false;
-                if (heater_mode_ == HeaterMode::AUTO) {
-                    in_standby_ = true;  // re-arm auto-restart for when the sensor recovers
-                }
+    // While the external room sensor keeps producing ACCEPTED readings, the
+    // timestamp is refreshed in refresh_room_temperature() (TX path, 1 Hz).
+    // NaN and physically implausible samples do NOT refresh it, so a DHT22
+    // that is dead or stuck emitting garbage is blind after 10 min. Then the
+    // last known value could hide an overheat (the 26C ambient limit reads
+    // the same stale value) and a stale cold value could trigger a blind
+    // start. Stop a running heater and block all auto-start/stop logic until
+    // fresh data arrives. (User requirement, 2026-10-20: DHT22 in warning
+    // state > 10 min -> heater off; 2026-10-21: also don't act on glitch
+    // samples.)
+    if (standalone_mode_ && external_temp_sensor_ != nullptr && is_room_sensor_stale()) {
+        if (on_off_value_ || heater_on_request_) {
+            ESP_LOGW(TAG, "Room sensor stale > %.0f min (last valid %.1fC): stopping heater",
+                     ROOM_SENSOR_TIMEOUT_MS / 60000.0f, current_temperature_value_);
+            pending_on_off_command_ = CMD_STOP;
+            heater_on_request_ = false;
+            in_cooldown_ = true;
+            in_auto_shutdown_ = false;
+            if (heater_mode_ == HeaterMode::AUTO) {
+                in_standby_ = true;  // re-arm auto-restart for when the sensor recovers
             }
-            return;  // block standby/auto-restart/auto-shutdown until fresh readings
         }
+        return;  // block standby/auto-restart/auto-shutdown until fresh readings
     }
 
     // === STANDBY CHECK (AUTO mode) ===
@@ -1193,10 +1236,10 @@ void HeaterUart::vevor_loop() {
 void HeaterUart::send_vevor_frame() {
     uint8_t frame[16];
 
-    // Refresh room temperature from the external sensor (same as BDAP TX)
-    if (external_temp_sensor_ != nullptr && !std::isnan(external_temp_sensor_->state)) {
-        current_temperature_value_ = external_temp_sensor_->state;
-    }
+    // Refresh room temperature from the external sensor (physics guard:
+    // rejects NaN and implausible DHT22 glitch samples, holds last trusted
+    // value). Same as BDAP TX path.
+    refresh_room_temperature();
 
     // Command / requested-state selection (mirrors the zatakon state machine)
     uint8_t command;
