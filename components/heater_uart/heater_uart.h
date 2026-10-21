@@ -123,7 +123,12 @@ class HeaterUart : public PollingComponent, public uart::UARTDevice {
   // value per sensor interval). A DHT22 right after a failed read can emit a
   // garbage-but-valid sample (2026-10-21: 18.4C against a 19.2C trend, which
   // tripped a false standby->start); such samples are rejected and the last
-  // trusted value is held. Returns true if the reading was accepted.
+  // trusted value is held. At boot, no single sample may become the baseline:
+  // the first ROOM_TEMP_BOOT_SAMPLES distinct readings (>=5 s apart, ~30 s
+  // total) must agree within ROOM_TEMP_BOOT_MAX_SPREAD, and the baseline is
+  // the median of the three. Until then the sensor counts as stale, so AUTO
+  // keeps the heater off (the safe state right after a reboot anyway).
+  // Returns true if the reading was accepted.
   bool refresh_room_temperature();
   float get_current_temperature() const { return current_temperature_value_; }
   float get_pump_frequency_setting() const { return pump_freq_setting_; }
@@ -249,7 +254,13 @@ class HeaterUart : public PollingComponent, public uart::UARTDevice {
   uint32_t last_valid_room_temp_time_ = 0;  // millis() of the last ACCEPTED room-sensor reading; 0 = none yet (treated as stale after 10 min)
   static const uint32_t ROOM_SENSOR_TIMEOUT_MS = 10 * 60 * 1000;  // 10 min without an accepted room reading = sensor fault
   static constexpr float ROOM_TEMP_MAX_STEP = 0.5f;  // max plausible room-temp change per 10s sensor interval (observed field rate ~0.3C/min); larger jumps are DHT22 glitch samples
-  bool room_temp_accepted_ever_ = false;  // first valid reading is always accepted (no baseline to compare)
+  bool room_temp_accepted_ever_ = false;  // baseline established (via boot consensus); the first valid reading alone is NOT accepted
+  static constexpr float ROOM_TEMP_BOOT_MAX_SPREAD = 2.0f;  // the first 3 boot samples must agree within this spread to establish the baseline (physical drift over ~30s is ~0.05C, so wider means a bad sample)
+  static constexpr uint8_t ROOM_TEMP_BOOT_SAMPLES = 3;
+  static constexpr uint32_t ROOM_TEMP_BOOT_MIN_SPACING_MS = 5000;  // counted boot samples must be >=5 s apart (sensor interval is 10 s) so each is a distinct DHT22 conversion, not a re-read of the same value
+  float room_temp_boot_sample_[ROOM_TEMP_BOOT_SAMPLES] = {0.0f, 0.0f, 0.0f};
+  uint8_t room_temp_boot_sample_count_ = 0;
+  uint32_t room_temp_boot_last_sample_time_ = 0;
   int error_code_value_ = 0;
   int run_state_value_ = 0;
   bool on_off_value_ = false;

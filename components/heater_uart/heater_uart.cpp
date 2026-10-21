@@ -852,16 +852,50 @@ void HeaterUart::parse_rx_frame(const uint8_t *frame, size_t length) {
 //   - Accepted readings refresh last_valid_room_temp_time_, so a DHT22 that
 //     is dead or persistently implausible is declared blind after
 //     ROOM_SENSOR_TIMEOUT_MS and the thermostat stops the heater.
+//   - At boot, no single sample may become the baseline (a DHT22 can misfire
+//     on its first conversion after power-on). The first ROOM_TEMP_BOOT_SAMPLES
+//     non-NaN samples, at least ROOM_TEMP_BOOT_MIN_SPACING_MS apart so each is
+//     a distinct sensor conversion (~30 s total), must agree within
+//     ROOM_TEMP_BOOT_MAX_SPREAD; the baseline is their median. A failed window
+//     is discarded and retried with the next three samples. Until the baseline
+//     is established last_valid_room_temp_time_ stays 0, is_room_sensor_stale()
+//     is true, and AUTO keeps the heater off - the safe state right after a
+//     reboot, when the relay has just de-energized.
 bool HeaterUart::refresh_room_temperature() {
     if (external_temp_sensor_ == nullptr) return false;
     const float sample = external_temp_sensor_->state;
     if (std::isnan(sample)) return false;
 
     if (!room_temp_accepted_ever_) {
-        // First valid reading: no baseline to compare yet, accept it.
+        // Boot consensus window: require 3 distinct readings to agree before
+        // establishing the baseline.
+        const uint32_t now = millis();
+        if (room_temp_boot_sample_count_ > 0 &&
+            now - room_temp_boot_last_sample_time_ < ROOM_TEMP_BOOT_MIN_SPACING_MS) {
+            return false;  // same DHT22 reading as the one already counted; wait for the next conversion
+        }
+        room_temp_boot_sample_[room_temp_boot_sample_count_++] = sample;
+        room_temp_boot_last_sample_time_ = now;
+        if (room_temp_boot_sample_count_ < ROOM_TEMP_BOOT_SAMPLES) return false;
+        room_temp_boot_sample_count_ = 0;
+
+        const float a = room_temp_boot_sample_[0];
+        const float b = room_temp_boot_sample_[1];
+        const float c = room_temp_boot_sample_[2];
+        const float mn = a < b ? (a < c ? a : c) : (b < c ? b : c);
+        const float mx = a > b ? (a > c ? a : c) : (b > c ? b : c);
+        const float spread = mx - mn;
+        if (spread > ROOM_TEMP_BOOT_MAX_SPREAD) {
+            ESP_LOGW(TAG, "Boot room-temp samples disagree (spread %.1fC > %.1fC): retrying 3-sample consensus",
+                     spread, ROOM_TEMP_BOOT_MAX_SPREAD);
+            return false;  // discard window; next three samples start over
+        }
+        const float median = a + b + c - mn - mx;  // median of three
         room_temp_accepted_ever_ = true;
-        current_temperature_value_ = sample;
-        last_valid_room_temp_time_ = millis();
+        current_temperature_value_ = median;
+        last_valid_room_temp_time_ = now;
+        ESP_LOGI(TAG, "Room temp baseline %.1fC established (3-sample consensus, spread %.1fC)",
+                 median, spread);
         return true;
     }
 
