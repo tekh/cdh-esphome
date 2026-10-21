@@ -84,8 +84,8 @@ heater_uart:
     temperature_sensor: dht22_temperature  # DHT22 for room temperature in standalone mode
     temperature_backoff: 0.5  # Start ramping down pump this many °C before target
     altitude: 762  # metres above sea level (0-5000) - confirmed real altitude; Vevor TX derates fuel by sigma(h), BDAP sends this in-frame
-    auto_shutdown_overshoot: 0.5   # Trigger when room > target + 0.5°C at min pump AND pump has reached 1.3hz
-    auto_shutdown_hysteresis: 1.5  # Restart when room < target - 1.5°C
+    auto_shutdown_overshoot: 0.0   # Trigger when room > target (setpoint) at min pump. 2026-10-20: 0.5 -> 0.0 per spec (shut off once past the set temperature; with 0.5 the heater idled at min level indefinitely when the room's min-output equilibrium sat below target+0.5). Code checks pump <= pump_freq_min+0.05, not 1.3Hz.
+    auto_shutdown_hysteresis: 1.0  # Restart when room < target - 1.0°C (re-engage offset chosen 2026-10-20; was 1.5)
     approach_threshold: 1.0        # Start reducing pump when within 1°C of target (gentler approach)
     ambient_heat_limit: 26.0       # HEAT mode not AUTO safety limit - force shutdown if room > 26°C (range: -40 to 80°C)
 
