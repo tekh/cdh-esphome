@@ -3,6 +3,10 @@
 **Companion to `ARCHITECTURE-ANALYSIS.md`** (analysis = why; this = what/when).
 Status markers: ☐ not started · ◐ in progress · ● done.
 
+**Status 2026-10-24: all six phases complete and device-verified** on the
+bench unit (vevor_2kw_v2, behaviour unchanged at every flash); BDAP remains
+parked per ISSUES.md #1.
+
 ## Decisions (from the 2026-04-19 review)
 
 | # | Topic | Decision |
@@ -59,8 +63,9 @@ conversions collapsed into `heater_output.h` free functions (host-tested);
 ESPHome compile verified clean by the owner.
 **1b. LCD injection removal.** ✔ Tag `lcd-injection-final` set, 48-byte
 sniff/injection path and the `standalone_mode:` YAML key deleted, ambient-limit
-check and priming timeout unified into `standalone_loop()` before the protocol
-dispatch (`PRIMING_DURATION_MS` named constant).
+check and priming timeout unified into the main loop (then `standalone_loop()`,
+now `heater_uart.cpp loop()`) before the protocol dispatch
+(`PRIMING_DURATION_MS` named constant, later YAML-overridable).
 Verification: tests green ✔, owner ESPHome compile ✔, bench flash ✔.
 
 ### Phase 2 — ProtocolDriver extraction ● (device-verified 2026-10-24)
@@ -112,13 +117,14 @@ Verification: tests 81/586 ✔, stub-check ✔, owner compile ✔, bench ✔ —
 behavior identical with all overrides commented out (defaults = v1
 constants byte-for-byte).
 
-### Phase 5 — new-heater checklist ☐ (the maintainability payoff)
+### Phase 5 — new-heater checklist ● (2026-10-24)
 Adding heater N = one profile factory (+ YAML overrides), one enum entry,
 one `cv.enum` line — and a `ProtocolDriver` **only if** the protocol is new.
-Phases 0–4 landed; write this checklist into `README.md` as the closing
-deliverable, verify the doc set tells one coherent story (README / AGENTS.md
-root + component / ROADMAP / ISSUES), and capture the finished initiative
-state to Hindsight.
+Delivered: the "Adding a New Heater (Heater N)" section in `README.md`
+(same-protocol path = data only; new-protocol path = one driver + manifest
+file + host framing/decode tests) plus a doc-set coherence pass over README /
+root AGENTS.md / component AGENTS.md / ISSUES.md. Gates re-run clean:
+81 tests / 586 checks, stub-check ✔. No code changes.
 
 ## Phase gates
 
