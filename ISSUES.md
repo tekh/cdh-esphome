@@ -133,12 +133,16 @@ Status markers: **OPEN** (actionable) · **PARKED** (deliberately deferred) ·
    used for altitude. The BME280 automatic-altitude upgrade (this item's sensor
    half) is the standing follow-up.
 
-11. **OPEN — hardcoded API key in `lab-heater-butler.yaml`, public repo.**
-    The ESPHome API encryption key is inline; the repo is public. Pre-existing
-    (already published on `origin/full_control_w_autoshutoff` before 2026-10-12),
-    so this push did not newly expose it. Device is LAN-only, so practical risk is
-    low. Closes when: the key moves to `secrets.yaml` and/or is rotated on both
-    device and HA.
+11. **PARTLY CLOSED 2026-10-24 — API key moved out of the tracked config.**
+    The live config now references `!secret` for the API encryption key, the
+    WiFi credentials and the use_address; the values live in an untracked,
+    gitignored `secrets.yaml`. **Still open:** the old inline key is public in
+    git history (it was committed long before the refactor, on a public repo),
+    and deleting it from the config does not un-publish it. Full close =
+    regenerate the API encryption key in HA (the old one is void), put the new
+    value in `secrets.yaml`, reflash. Practical risk stays low either way:
+    the device is LAN-only and the key is only useful to someone already on
+    the network.
 
 12. **CHANGED 2026-10-20 — Auto-mode band: shutdown at the setpoint, re-engage at target-1.0.**
     Field symptom "heater stays on": `auto_shutdown_overshoot: 0.5` required the

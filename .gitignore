@@ -1,5 +1,7 @@
 /logs/
 .idea/
+# ESPHome secrets - never tracked (lab-heater-butler.yaml references it)
+secrets.yaml
 #/@notes/
 /@notes/bluetoothheater-master.zip
 /.claude/
