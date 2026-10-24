@@ -87,6 +87,28 @@ heater_uart:
 > value that later proves wrong gets fixed in the preset (and can be
 > overridden per-deployment in YAML meanwhile — see Tuning Overrides below).
 
+### Capabilities per model
+
+What each heater can actually *do* differs by protocol and policy, not just by
+numbers:
+
+| Capability | `jeabong_8kw` | `vevor_2kw` | `vevor_2kw_v2` |
+|---|---|---|---|
+| Fuel dial | pump frequency (Hz) | power level 1–10 | power level 1–10 |
+| Combustion fan dial | fan RPM exists in the protocol (dial not yet implemented — ISSUES #2) | not in the protocol | not in the protocol |
+| Fuel Prime button | **works** — 60 s pump-only run (bleeds air) | **no-op** — ECM self-primes on every start; pressing logs a warning | **no-op** — same |
+| HEAT mode behaviour | firmware modulates like AUTO | firmware modulates like AUTO | **user-owned level**: sent verbatim, ramps down toward target |
+| Combustion-safety authority | the **firmware** — its safety stack is always on (cannot be disabled) | the **ECM** — the firmware's extra HX stack can be disabled via `firmware_safety_oversight: false` | the **ECM** — same opt-out |
+| Altitude handling | sent in-frame, ECM derates | open-loop fuel derate at the TX boundary (σ(h)) | open-loop fuel derate (σ(h)) |
+| Error reporting | BDAP error byte | E-codes (E01–E10) | E-codes (E01–E10) |
+| Validation status | validated on the original hardware (parked, no device target) | same hardware as v2; its unexercised part is the firmware-modulated HEAT policy | **in production** (lab device) |
+
+Safety that applies to **every** model regardless of the above (not
+removable by any setting): the room-sensor guard (glitch rejection, boot
+consensus, 10-minute staleness cutoff) and the `ambient_heat_limit` shutdown in
+HEAT mode. AUTO-mode behaviour is identical across models — only the fuel
+dial and the policy flags differ.
+
 ### Vevor protocol notes (interfacing phase)
 
 The Vevor bus is **not** the classic BDAP protocol:
@@ -142,7 +164,9 @@ One file each, zero policy/thermostat changes:
    `heater_model:` mapping (key must match the YAML name exactly, lower-case).
 3. **`tests/test_profiles.cpp`** — add the model to `ALL_MODELS`; the existing
    invariant tests then cover the new preset at `make -C tests` time.
-4. **This README** — one row in the heater table above.
+4. **This README** — one row in the heater table above *and* one column in the
+   "Capabilities per model" table (dials, priming, HEAT policy, safety
+   authority — read from the profile's capability flags, not from memory).
 
 Then, per device YAML:
 
