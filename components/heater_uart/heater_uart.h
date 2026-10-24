@@ -62,6 +62,42 @@ class HeaterUart : public PollingComponent, public uart::UARTDevice, public Byte
   void set_ambient_heat_limit(float limit) { this->ambient_heat_limit_ = limit; }
   void set_firmware_safety_oversight(bool enabled) { this->firmware_safety_oversight_ = enabled; }
 
+  // --- Tuning overrides (ROADMAP Phase 4). All optional in YAML; each key
+  // mutates the copied profile_ (per-key override over the compiled preset).
+  // NOT exposed: protocol/capability/policy flags (heat_mode_manual,
+  // ecm_owned_safety, has_*_control) - they are model identity, not tuning.
+  void set_pump_freq_min(float v) { profile_.pump_freq_min = v; }
+  void set_pump_freq_max(float v) { profile_.pump_freq_max = v; }
+  void set_pump_freq_step(float v) { profile_.pump_freq_step = v; }
+  void set_pump_freq_initial(float v) { profile_.pump_freq_initial = v; }
+  void set_pump_prime_freq(float v) { profile_.pump_prime_freq = v; }
+  void set_fan_rpm_min(uint16_t v) { profile_.fan_rpm_min = v; }
+  void set_fan_rpm_max(uint16_t v) { profile_.fan_rpm_max = v; }
+  void set_ignition_fan_rpm(uint16_t v) { profile_.ignition_fan_rpm = v; }
+  void set_cooldown_fan_rpm(uint16_t v) { profile_.cooldown_fan_rpm = v; }
+  void set_ignition_hx_threshold(float v) { profile_.ignition_hx_threshold = v; }
+  void set_hx_temp_low(float v) { profile_.hx_temp_low = v; }
+  void set_hx_temp_target(float v) { profile_.hx_temp_target = v; }
+  void set_hx_temp_high(float v) { profile_.hx_temp_high = v; }
+  void set_hx_temp_critical(float v) { profile_.hx_temp_critical = v; }
+  void set_cooldown_target_temp(float v) { profile_.cooldown_target_temp = v; }
+  void set_fan_sensor(uint8_t v) { profile_.fan_sensor = v; }
+  void set_glow_power(uint8_t v) { profile_.glow_power = v; }
+  void set_temp_min(uint8_t v) { profile_.temp_min = v; }
+  void set_temp_max(uint8_t v) { profile_.temp_max = v; }
+
+  // Thermostat policy overrides (v1 constants, now YAML-tunable).
+  void set_pump_adjust_interval(float seconds) { pump_adjust_interval_ms_ = (uint32_t)(seconds * 1000.0f); }
+  void set_priming_duration(float seconds) { priming_duration_ms_ = (uint32_t)(seconds * 1000.0f); }
+  void set_thermostat_gap_far(float v) { gap_threshold_far_ = v; }
+  void set_thermostat_gap_mid(float v) { gap_threshold_mid_ = v; }
+  void set_thermostat_step_mult_far(float v) { step_mult_far_ = v; }
+  void set_thermostat_step_mult_mid(float v) { step_mult_mid_ = v; }
+  void set_thermostat_os_big(float v) { os_threshold_big_ = v; }
+  void set_thermostat_os_mid(float v) { os_threshold_mid_ = v; }
+  void set_thermostat_os_mult_big(float v) { os_mult_big_ = v; }
+  void set_thermostat_os_mult_mid(float v) { os_mult_mid_ = v; }
+
   // Heater mode control
   void set_heater_mode(HeaterMode mode);
 
@@ -180,9 +216,21 @@ class HeaterUart : public PollingComponent, public uart::UARTDevice, public Byte
   float approach_threshold_ = 1.0f;        // Start reducing pump when within this of target (°C)
   bool firmware_safety_oversight_ = true;  // gated: false only honoured on ecm_owned_safety profiles
 
+  // Thermostat policy overrides (defaults = the v1 hardcoded constants)
+  uint32_t pump_adjust_interval_ms_ = 5000;
+  float gap_threshold_far_ = 5.0f;
+  float gap_threshold_mid_ = 2.0f;
+  float step_mult_far_ = 3.0f;
+  float step_mult_mid_ = 2.0f;
+  float os_threshold_big_ = 1.0f;
+  float os_threshold_mid_ = 0.5f;
+  float os_mult_big_ = 3.0f;
+  float os_mult_mid_ = 2.0f;
+
   // Fuel priming state
   bool is_priming_ = false;                // Fuel priming active
   uint32_t priming_start_time_ = 0;        // Time when priming started (millis)
+  uint32_t priming_duration_ms_ = PRIMING_DURATION_MS;  // YAML-overridable run length
 
   // Telemetry mirror for update() publishing (copied on each fresh frame)
   int fan_speed_value_ = 0;

@@ -8,7 +8,11 @@
 
 using esphome::heater_uart::HeaterModel;
 using esphome::heater_uart::HeaterProfile;
+using esphome::heater_uart::ProfileValidationReport;
 using esphome::heater_uart::profile_for;
+using esphome::heater_uart::validate_profile_invariants;
+
+static HeaterProfile copy(HeaterModel m) { return profile_for(m); }
 
 static const HeaterModel ALL_MODELS[] = {
     HeaterModel::JEABONG_8KW,
@@ -90,4 +94,60 @@ TEST(profile_v2_differs_from_v1_only_in_policy) {
   CHECK(v1.has_pump_hz_control == v2.has_pump_hz_control);
   CHECK(v1.has_power_level_control == v2.has_power_level_control);
   CHECK(v1.has_fan_rpm_control == v2.has_fan_rpm_control);
+}
+
+// --- Phase 4: override validation (self-healing to preset) ---
+
+TEST(validation_clean_profile_untouched) {
+  for (const HeaterModel m : ALL_MODELS) {
+    HeaterProfile p = copy(m);
+    const HeaterProfile &preset = profile_for(m);
+    const auto r = validate_profile_invariants(p, preset);
+    CHECK(r.clean() == true);
+    CHECK(p.pump_freq_min == preset.pump_freq_min);
+    CHECK(p.hx_temp_critical == preset.hx_temp_critical);
+  }
+}
+
+TEST(validation_reverts_degenerate_pump_range) {
+  HeaterProfile p = copy(HeaterModel::VEVOR_2KW);
+  p.pump_freq_min = 3.0f;  // >= max 2.5 -> degenerate
+  p.pump_prime_freq = 99.0f;  // outside any range
+  const auto r = validate_profile_invariants(p, profile_for(HeaterModel::VEVOR_2KW));
+  CHECK(r.pump_range_reverted == true);
+  CHECK_NEAR(p.pump_freq_min, 0.5f, 1e-6);
+  CHECK_NEAR(p.pump_freq_max, 2.5f, 1e-6);
+  CHECK_NEAR(p.pump_prime_freq, 2.5f, 1e-6);
+  CHECK(r.hx_chain_reverted == false);
+}
+
+TEST(validation_reverts_initial_outside_range) {
+  HeaterProfile p = copy(HeaterModel::JEABONG_8KW);
+  p.pump_freq_initial = 99.0f;
+  const auto r = validate_profile_invariants(p, profile_for(HeaterModel::JEABONG_8KW));
+  CHECK(r.pump_range_reverted == true);
+  CHECK_NEAR(p.pump_freq_initial, 1.8f, 1e-6);
+}
+
+TEST(validation_reverts_broken_hx_chain) {
+  HeaterProfile p = copy(HeaterModel::VEVOR_2KW_V2);
+  p.hx_temp_high = 100.0f;  // < target 180 -> chain broken
+  const auto r = validate_profile_invariants(p, profile_for(HeaterModel::VEVOR_2KW_V2));
+  CHECK(r.hx_chain_reverted == true);
+  CHECK_NEAR(p.hx_temp_low, 145.0f, 1e-6);
+  CHECK_NEAR(p.hx_temp_target, 180.0f, 1e-6);
+  CHECK_NEAR(p.hx_temp_high, 190.0f, 1e-6);
+  CHECK_NEAR(p.hx_temp_critical, 205.0f, 1e-6);
+}
+
+TEST(validation_reverts_degenerate_fan_and_temp) {
+  HeaterProfile p = copy(HeaterModel::JEABONG_8KW);
+  p.fan_rpm_min = 5000;  // >= max
+  p.temp_min = 30; p.temp_max = 10;
+  const auto r = validate_profile_invariants(p, profile_for(HeaterModel::JEABONG_8KW));
+  CHECK(r.fan_range_reverted == true);
+  CHECK(r.temp_range_reverted == true);
+  CHECK(p.fan_rpm_min == 1450);
+  CHECK(p.temp_min == 0);
+  CHECK(p.temp_max == 30);
 }

@@ -213,5 +213,68 @@ inline const HeaterProfile &profile_for(HeaterModel model) {
   }
 }
 
+// Which invariant groups an override validation had to repair.
+struct ProfileValidationReport {
+  bool pump_range_reverted = false;    // min >= max (or prime/initial outside)
+  bool fan_range_reverted = false;     // min >= max
+  bool hx_chain_reverted = false;      // low < target < high < critical broken
+  bool temp_range_reverted = false;    // min >= max
+  bool clean() const { return !(pump_range_reverted || fan_range_reverted ||
+                                hx_chain_reverted || temp_range_reverted); }
+};
+
+// Repair YAML overrides that would break a profile invariant. Permissive by
+// design (single-operator audience): every violation is reverted to the
+// compiled preset value for that model - a typo can never silently disable a
+// safety net, and the warning text tells the owner which keys to fix.
+// Pure (host-tested in tests/test_profiles.cpp).
+inline ProfileValidationReport validate_profile_invariants(HeaterProfile &p,
+                                                           const HeaterProfile &preset) {
+  ProfileValidationReport r;
+
+  // --- fuel pump: min < max, and prime/initial inside the range ---
+  if (!(p.pump_freq_min < p.pump_freq_max)) {
+    p.pump_freq_min = preset.pump_freq_min;
+    p.pump_freq_max = preset.pump_freq_max;
+    r.pump_range_reverted = true;
+  }
+  if (!(p.pump_prime_freq >= p.pump_freq_min && p.pump_prime_freq <= p.pump_freq_max)) {
+    p.pump_prime_freq = preset.pump_prime_freq;
+    r.pump_range_reverted = true;
+  }
+  if (!(p.pump_freq_initial >= p.pump_freq_min && p.pump_freq_initial <= p.pump_freq_max)) {
+    p.pump_freq_initial = preset.pump_freq_initial;
+    r.pump_range_reverted = true;
+  }
+
+  // --- fan: min < max (ignition/cooldown clamped by encode, not validated) ---
+  if (!(p.fan_rpm_min < p.fan_rpm_max)) {
+    p.fan_rpm_min = preset.fan_rpm_min;
+    p.fan_rpm_max = preset.fan_rpm_max;
+    r.fan_range_reverted = true;
+  }
+
+  // --- HX safety chain: low < target < high < critical, cooldown below low ---
+  if (!(p.hx_temp_low < p.hx_temp_target && p.hx_temp_target < p.hx_temp_high &&
+        p.hx_temp_high < p.hx_temp_critical &&
+        p.cooldown_target_temp < p.hx_temp_low)) {
+    p.hx_temp_low = preset.hx_temp_low;
+    p.hx_temp_target = preset.hx_temp_target;
+    p.hx_temp_high = preset.hx_temp_high;
+    p.hx_temp_critical = preset.hx_temp_critical;
+    p.cooldown_target_temp = preset.cooldown_target_temp;
+    r.hx_chain_reverted = true;
+  }
+
+  // --- setpoint range ---
+  if (!(p.temp_min < p.temp_max)) {
+    p.temp_min = preset.temp_min;
+    p.temp_max = preset.temp_max;
+    r.temp_range_reverted = true;
+  }
+
+  return r;
+}
+
 }  // namespace heater_uart
 }  // namespace esphome

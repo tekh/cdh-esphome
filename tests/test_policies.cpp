@@ -560,3 +560,100 @@ TEST(room_sensor_persistent_badness_declares_blind) {
   CHECK(g.stale(640000) == true);
   CHECK(g.stale(600000) == false);  // exactly 10 min boundary not yet passed
 }
+
+// --- Phase 4: params-driven knobs (overridable via YAML) ---
+
+TEST(pump_adjust_interval_override_changes_gate) {
+  const HeaterProfile p = jeabong_profile();
+  Thermostat t;
+  t.begin(p);
+  t.seat_request(2.0f);
+  t.reset_adjust_timer(1000);
+  auto params = params_for(p);
+  // default 5000 ms gate: no adjustment at t=4000
+  auto r = t.control(running_tlm(200), 15.0f, 19.0f, HeaterMode::AUTO, params, 4000);
+  CHECK_NEAR(r.pump_request_hz, 2.0f, 1e-4);
+  // overridden to 2500 ms: adjustment fires at t=4000
+  params.pump_adjust_interval_ms = 2500;
+  r = t.control(running_tlm(200), 15.0f, 19.0f, HeaterMode::AUTO, params, 4000);
+  CHECK_NEAR(r.pump_request_hz, 2.2f, 1e-4);  // gap 4 -> mid 2x
+}
+
+TEST(aggressiveness_override_changes_step) {
+  const HeaterProfile p = jeabong_profile();
+  Thermostat t;
+  t.begin(p);
+  t.seat_request(2.0f);
+  t.reset_adjust_timer(1000);
+  auto params = params_for(p);
+  params.pump_adjust_interval_ms = 1000;  // gate open every tick
+  // default gap thresholds: gap 3 -> mid band -> 2x
+  auto r = t.control(running_tlm(200), 16.0f, 19.0f, HeaterMode::AUTO, params, 2000);
+  CHECK_NEAR(r.pump_request_hz, 2.2f, 1e-4);
+  // overridden: mid threshold 4.0 -> gap 3 now counts as FAR-ish? no: far=5 still bigger.
+  // instead raise mid multiplier to 4x:
+  Thermostat t2;
+  t2.begin(p);
+  t2.seat_request(2.0f);
+  t2.reset_adjust_timer(1000);
+  auto params2 = params_for(p);
+  params2.pump_adjust_interval_ms = 1000;
+  params2.step_mult_mid = 4.0f;
+  auto r2 = t2.control(running_tlm(200), 16.0f, 19.0f, HeaterMode::AUTO, params2, 2000);
+  CHECK_NEAR(r2.pump_request_hz, 2.4f, 1e-4);
+}
+
+TEST(auto_shutoff_walks_pump_to_min_then_stops) {
+  // Pin the actual v1 dynamic: at/above target the 3-phase reduces ONE step
+  // per adjustment interval (overshoot 0.4C < 0.5 mid threshold = 1x), the
+  // pump lands at minimum after N ticks, and the shutdown check then fires
+  // with the SAME overshoot. (Also why pump_epsilon is NOT YAML-exposed: the
+  // pump always lands exactly on minimum, never between.)
+  const HeaterProfile p = jeabong_profile();
+  Thermostat t;
+  t.begin(p);
+  t.seat_request(2.5f);
+  t.reset_adjust_timer(1000);
+  auto params = params_for(p);
+  params.auto_shutdown_overshoot = 0.0f;
+
+  bool stopped = false;
+  uint32_t now = 6000;
+  for (int tick = 0; tick < 20; tick++, now += 5000) {
+    const auto r = t.control(running_tlm(200), 19.4f, 19.0f, HeaterMode::AUTO, params, now);
+    if (r.request_stop) {
+      stopped = true;
+      CHECK_NEAR(r.pump_request_hz, p.pump_freq_min, 1e-4);  // stopped only once AT min
+      break;
+    }
+    // never stops while the pump is above minimum
+    CHECK(r.pump_request_hz > p.pump_freq_min);
+  }
+  CHECK(stopped == true);
+}
+
+TEST(overshoot_at_target_reduces_but_no_stop) {
+  // AUTO with the room AT target and the pump still mid-band: reduce, but do
+  // not stop (shutdown needs BOTH pump-at-min and overshoot).
+  const HeaterProfile p = jeabong_profile();
+  Thermostat t;
+  t.begin(p);
+  t.seat_request(2.5f);
+  t.reset_adjust_timer(1000);
+  const auto r = t.control(running_tlm(200), 19.0f, 19.0f, HeaterMode::AUTO, params_for(p), 6000);
+  CHECK(r.request_stop == false);
+}
+
+TEST(overshoot_within_interval_gate_blocks_shutdown) {
+  // Inside the adjustment interval NOTHING happens - no reduction AND no
+  // shutdown check (v1 gate order). Pins why cadence overrides are safe.
+  const HeaterProfile p = jeabong_profile();
+  Thermostat t;
+  t.begin(p);
+  t.seat_request(1.3f);  // already at min
+  t.reset_adjust_timer(5500);
+  auto params = params_for(p);
+  params.auto_shutdown_overshoot = 0.0f;
+  const auto r = t.control(running_tlm(200), 19.4f, 19.0f, HeaterMode::AUTO, params, 6000);
+  CHECK(r.request_stop == false);  // interval not elapsed
+}

@@ -138,6 +138,7 @@ Fine-tune the Auto mode behavior with these parameters:
 - `auto_shutdown_hysteresis` (schema default: 1.5°C, lab-heater: 1.0): Temperature drop below target needed before auto-restart (the re-engage offset)
 - `approach_threshold` (default: 1.0°C): Distance from target when approach control begins
 - `ambient_heat_limit` (default: 26.0°C): HEAT mode safety limit - forces shutdown if room > X°C (range: -40 to 80°C)
+- `firmware_safety_oversight` (default: true): Set `false` ONLY on heaters whose ECM handles combustion safety itself (the Vevor profiles) to let the ECM be the sole safety authority. Ignored with a warning on firmware-safety hardware (the 8kW).
 
 Example configuration:
 ```yaml
@@ -147,6 +148,36 @@ heater_uart:
   approach_threshold: 1.0
   ambient_heat_limit: 26.0  # HEAT mode safety limit (°C)
 ```
+
+### Tuning Overrides (per-key, over the model preset)
+
+Every tuning value below is optional; anything omitted keeps the selected
+model's compiled, bench-validated preset. Combos that would break a profile
+invariant (e.g. `pump_freq_min >= pump_freq_max`, or HX thresholds out of
+`low < target < high < critical` order) are **reverted to the preset at boot
+with a warning** — a typo can never silently disable a safety net.
+
+| Group | Keys | Unit |
+|---|---|---|
+| Fuel pump | `pump_freq_min`, `pump_freq_max`, `pump_freq_step`, `pump_freq_initial`, `pump_prime_freq` | Hz |
+| Combustion fan (BDAP) | `fan_rpm_min`, `fan_rpm_max`, `ignition_fan_rpm`, `cooldown_fan_rpm`, `ignition_hx_threshold` | RPM / °C |
+| Heat exchanger | `hx_temp_low`, `hx_temp_target`, `hx_temp_high`, `hx_temp_critical`, `cooldown_target_temp` | °C |
+| Frame constants | `fan_sensor`, `glow_power` | protocol byte |
+| Setpoint range | `temp_min`, `temp_max` | °C |
+| Cadence | `pump_adjust_interval`, `priming_duration` | seconds |
+| Aggressiveness | `thermostat_gap_far`, `thermostat_gap_mid`, `thermostat_step_mult_far`, `thermostat_step_mult_mid`, `thermostat_os_big`, `thermostat_os_mid`, `thermostat_os_mult_big`, `thermostat_os_mult_mid` | °C / × |
+
+```yaml
+heater_uart:
+  heater_model: vevor_2kw
+  pump_freq_min: 0.6   # e.g. a soft-running pump refuses 0.5
+  pump_adjust_interval: 3   # s - more responsive thermostat
+```
+
+Not exposed on purpose: model-identity flags (`heat_mode_manual`,
+`ecm_owned_safety`, the `has_*_control` capability flags) — those are the
+model, not tuning; protocol timing and framing (drivers); room-sensor physics
+guard constants (DHT22 facts, not heater tuning).
 
 ### Mode Options
 

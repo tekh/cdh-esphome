@@ -14,9 +14,25 @@ static const char *TAG = "heater_uart";
 void HeaterUart::setup() {
     ESP_LOGCONFIG(TAG, "Setting up Heater UART...");
 
-    // Re-apply the profile selected by `heater_model:` (fallback: 8kW defaults).
-    // NOTE: ambient heat limit is NOT reset here - it comes from YAML only.
-    this->profile_ = profile_for(this->profile_.model);
+    // NOTE: the profile was resolved once by set_heater_model() at variable
+    // construction; Phase 4 tuning overrides mutate that copy BEFORE setup()
+    // runs, so re-resolving here would wipe them. Instead, validate that the
+    // (possibly overridden) profile still holds its invariants - violations
+    // revert to the compiled preset with a warning.
+    const HeaterProfile preset = profile_for(this->profile_.model);
+    const ProfileValidationReport vr = validate_profile_invariants(this->profile_, preset);
+    if (vr.pump_range_reverted)
+        ESP_LOGW(TAG, "pump_freq overrides inconsistent (min>=max or prime/initial out of range): reverted to %s preset (%.1f-%.1f Hz)",
+                 preset.name, preset.pump_freq_min, preset.pump_freq_max);
+    if (vr.fan_range_reverted)
+        ESP_LOGW(TAG, "fan_rpm overrides inconsistent (min>=max): reverted to %s preset (%u-%u RPM)",
+                 preset.name, preset.fan_rpm_min, preset.fan_rpm_max);
+    if (vr.hx_chain_reverted)
+        ESP_LOGW(TAG, "hx_temp overrides break low<target<high<critical ordering: ALL HX thresholds reverted to %s preset",
+                 preset.name);
+    if (vr.temp_range_reverted)
+        ESP_LOGW(TAG, "temp_min/max overrides inconsistent (min>=max): reverted to %s preset",
+                 preset.name);
 
     // Select and bind the protocol driver for this heater (ROADMAP Phase 2):
     // the driver owns framing, cadence, echo discard, checksums, encode/decode.
@@ -72,9 +88,9 @@ void HeaterUart::loop() {
     }
 
     // Priming timeout (facade-level; duration: PRIMING_DURATION_MS)
-    if (is_priming_ && (now - priming_start_time_ >= PRIMING_DURATION_MS)) {
+    if (is_priming_ && (now - priming_start_time_ >= priming_duration_ms_)) {
         ESP_LOGI(TAG, "Fuel priming timeout reached (%u seconds) - stopping priming",
-                 (unsigned) (PRIMING_DURATION_MS / 1000));
+                 (unsigned) (priming_duration_ms_ / 1000));
         stop_priming();
     }
 
@@ -364,6 +380,15 @@ Thermostat::Params HeaterUart::build_params() const {
     params.oversight_enabled = safety_.oversight();
     params.external_sensor_present = external_temp_sensor_ != nullptr;
     params.sensor_stale = params.external_sensor_present && room_sensor_.stale(millis());
+    params.pump_adjust_interval_ms = pump_adjust_interval_ms_;
+    params.gap_threshold_far = gap_threshold_far_;
+    params.gap_threshold_mid = gap_threshold_mid_;
+    params.step_mult_far = step_mult_far_;
+    params.step_mult_mid = step_mult_mid_;
+    params.os_threshold_big = os_threshold_big_;
+    params.os_threshold_mid = os_threshold_mid_;
+    params.os_mult_big = os_mult_big_;
+    params.os_mult_mid = os_mult_mid_;
     return params;
 }
 
@@ -389,7 +414,7 @@ void HeaterUart::start_priming() {
     }
 
     ESP_LOGI(TAG, "Starting fuel priming - pump will run at %.1f Hz for %u seconds",
-             profile_.pump_prime_freq, (unsigned) (PRIMING_DURATION_MS / 1000));
+             profile_.pump_prime_freq, (unsigned) (priming_duration_ms_ / 1000));
     is_priming_ = true;
     priming_start_time_ = millis();
 

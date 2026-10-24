@@ -43,6 +43,8 @@ enum class HeaterMode : uint8_t {
 class Thermostat {
  public:
   // Per-tick control parameters (facade-owned configuration + profile policy).
+  // Defaults = the v1 hardcoded constants; the facade passes possibly-YAML-
+  // overridden values each tick (ROADMAP Phase 4).
   struct Params {
     float approach_threshold = 1.0f;         // °C from target where approach control begins
     float auto_shutdown_overshoot = 0.5f;    // °C above target before AUTO auto-shutdown
@@ -51,6 +53,17 @@ class Thermostat {
     bool oversight_enabled = true;           // firmware combustion oversight (gated by ecm_owned_safety)
     bool external_sensor_present = false;    // external room sensor declared in YAML
     bool sensor_stale = false;               // room sensor blind (RoomSensorGuard)
+    // --- thermostat cadence + aggressiveness (v1 hardcoded set) ---
+    uint32_t pump_adjust_interval_ms = 5000; // thermal mass: ms between adjustments
+    float gap_threshold_far = 5.0f;          // °C: gap >= this -> step_mult_far
+    float gap_threshold_mid = 2.0f;          // °C: gap >= this -> step_mult_mid
+    float step_mult_far = 3.0f;              // heating increase multiplier, far gap
+    float step_mult_mid = 2.0f;              // heating increase multiplier, mid gap
+    float os_threshold_big = 1.0f;           // °C: overshoot >= this -> os_mult_big
+    float os_threshold_mid = 0.5f;           // °C: overshoot >= this -> os_mult_mid
+    float os_mult_big = 3.0f;                // overshoot reduction multiplier, big
+    float os_mult_mid = 2.0f;                // overshoot reduction multiplier, mid
+    float pump_epsilon = 0.05f;              // Hz tolerance for at-min comparisons
   };
 
   // What the thermostat wants applied this tick. Multiple flags can be set;
@@ -107,20 +120,6 @@ class Thermostat {
   static float standby_threshold(float target_temp, const Params &params) {
     return target_temp - params.auto_shutdown_hysteresis;
   }
-
-  static const uint32_t PUMP_ADJUST_INTERVAL_MS = 5000;  // thermal mass: 5 s between adjustments
-  // Thermostat aggressiveness (hardcoded in 7 subtly-diverging copies in the
-  // old thermostat_control; hoisted here as named policy constants - Phase 4
-  // may expose them to YAML).
-  static constexpr float GAP_THRESHOLD_FAR = 5.0f;   // °C: gap >= this -> 3x step
-  static constexpr float GAP_THRESHOLD_MID = 2.0f;   // °C: gap >= this -> 2x step
-  static constexpr float STEP_MULT_FAR = 3.0f;
-  static constexpr float STEP_MULT_MID = 2.0f;
-  static constexpr float OS_THRESHOLD_BIG = 1.0f;    // °C: overshoot >= this -> 3x reduction
-  static constexpr float OS_THRESHOLD_MID = 0.5f;    // °C: overshoot >= this -> 2x reduction
-  static constexpr float OS_MULT_BIG = 3.0f;
-  static constexpr float OS_MULT_MID = 2.0f;
-  static constexpr float PUMP_EPSILON = 0.05f;       // Hz tolerance for at-min comparisons
 
   const HeaterProfile *profile_ = nullptr;
   float pump_freq_setting_ = 1.6f;

@@ -140,11 +140,11 @@ Thermostat::Result Thermostat::control(const Telemetry &tlm, float room_temp, fl
             // Heater has ignited - ramp pump to max to reach operating temp quickly
             // But respect the adjustment interval - thermal response takes time
             if (pump_freq_setting_ < profile.pump_freq_max) {
-                if (now - last_pump_adjust_time_ >= PUMP_ADJUST_INTERVAL_MS) {
+                if (now - last_pump_adjust_time_ >= params.pump_adjust_interval_ms) {
                     // Scale step based on how cold the room is
                     float temp_gap = target_temp - room_temp;
-                    float multiplier = (temp_gap >= GAP_THRESHOLD_FAR)   ? STEP_MULT_FAR
-                                       : (temp_gap >= GAP_THRESHOLD_MID) ? STEP_MULT_MID
+                    float multiplier = (temp_gap >= params.gap_threshold_far)   ? params.step_mult_far
+                                       : (temp_gap >= params.gap_threshold_mid) ? params.step_mult_mid
                                                                           : 1.0f;
                     float step = profile.pump_freq_step * multiplier;
 
@@ -180,7 +180,7 @@ Thermostat::Result Thermostat::control(const Telemetry &tlm, float room_temp, fl
         // === ROOM TEMPERATURE THERMOSTAT (AUTO mode only) ===
         // In ON mode, skip thermostat control - user wants heat regardless of temperature
         // Only adjust if enough time has passed - thermal mass means changes take time
-        if (now - last_pump_adjust_time_ < PUMP_ADJUST_INTERVAL_MS) {
+        if (now - last_pump_adjust_time_ < params.pump_adjust_interval_ms) {
             out.pump_request_hz = pump_freq_setting_;
             return out;  // Wait for thermal response before next adjustment
         }
@@ -201,8 +201,8 @@ Thermostat::Result Thermostat::control(const Telemetry &tlm, float room_temp, fl
             if (room_temp < approach_temp) {
                 // HEATING PHASE: Room is cold, increase pump
                 // Larger gaps = more aggressive increase
-                float multiplier = (temp_gap >= GAP_THRESHOLD_FAR)   ? STEP_MULT_FAR
-                                   : (temp_gap >= GAP_THRESHOLD_MID) ? STEP_MULT_MID
+                float multiplier = (temp_gap >= params.gap_threshold_far)   ? params.step_mult_far
+                                   : (temp_gap >= params.gap_threshold_mid) ? params.step_mult_mid
                                                                       : 1.0f;
                 float step = profile.pump_freq_step * multiplier;
                 new_freq = pump_freq_setting_ + step;
@@ -223,8 +223,8 @@ Thermostat::Result Thermostat::control(const Telemetry &tlm, float room_temp, fl
                 // AT/ABOVE TARGET: Reduce pump rapidly to prevent overshoot
                 // Larger overshoot = more aggressive reduction
                 float overshoot = room_temp - target_temp;
-                float multiplier = (overshoot >= OS_THRESHOLD_BIG)   ? OS_MULT_BIG
-                                   : (overshoot >= OS_THRESHOLD_MID) ? OS_MULT_MID
+                float multiplier = (overshoot >= params.os_threshold_big)   ? params.os_mult_big
+                                   : (overshoot >= params.os_threshold_mid) ? params.os_mult_mid
                                                                       : 1.0f;
                 float step = profile.pump_freq_step * multiplier;
                 new_freq = pump_freq_setting_ - step;
@@ -253,8 +253,8 @@ Thermostat::Result Thermostat::control(const Telemetry &tlm, float room_temp, fl
                 } else {
                     // at/above the request: keep stepping down, all the way to the floor
                     float overshoot = room_temp - target_temp;
-                    float multiplier = (overshoot >= OS_THRESHOLD_BIG)   ? OS_MULT_BIG
-                                       : (overshoot >= OS_THRESHOLD_MID) ? OS_MULT_MID
+                    float multiplier = (overshoot >= params.os_threshold_big)   ? params.os_mult_big
+                                       : (overshoot >= params.os_threshold_mid) ? params.os_mult_mid
                                                                           : 1.0f;
                     float step = profile.pump_freq_step * multiplier;
                     new_freq = std::max(profile.pump_freq_min, pump_freq_setting_ - step);
@@ -268,8 +268,8 @@ Thermostat::Result Thermostat::control(const Telemetry &tlm, float room_temp, fl
             if (room_temp < approach_temp) {
                 // HEATING PHASE: Room is cold, increase pump as needed
                 float temp_gap = target_temp - room_temp;
-                float multiplier = (temp_gap >= GAP_THRESHOLD_FAR)   ? STEP_MULT_FAR
-                                   : (temp_gap >= GAP_THRESHOLD_MID) ? STEP_MULT_MID
+                float multiplier = (temp_gap >= params.gap_threshold_far)   ? params.step_mult_far
+                                   : (temp_gap >= params.gap_threshold_mid) ? params.step_mult_mid
                                                                       : 1.0f;
                 float step = profile.pump_freq_step * multiplier;
                 new_freq = pump_freq_setting_ + step;
@@ -282,8 +282,8 @@ Thermostat::Result Thermostat::control(const Telemetry &tlm, float room_temp, fl
                 // This maintains heat without overshooting too much
                 if (pump_freq_setting_ > profile.pump_freq_min) {
                     float overshoot = room_temp - target_temp;
-                    float multiplier = (overshoot >= OS_THRESHOLD_BIG)   ? OS_MULT_BIG
-                                       : (overshoot >= OS_THRESHOLD_MID) ? OS_MULT_MID
+                    float multiplier = (overshoot >= params.os_threshold_big)   ? params.os_mult_big
+                                       : (overshoot >= params.os_threshold_mid) ? params.os_mult_mid
                                                                           : 1.0f;
                     float step = profile.pump_freq_step * multiplier;
                     new_freq = pump_freq_setting_ - step;
@@ -333,7 +333,7 @@ Thermostat::Result Thermostat::control(const Telemetry &tlm, float room_temp, fl
         // - Pump at minimum (can't reduce further)
         // - Room temperature exceeds target + overshoot threshold
         if (mode == HeaterMode::AUTO) {
-            bool pump_at_min = (pump_freq_setting_ <= profile.pump_freq_min + PUMP_EPSILON);
+            bool pump_at_min = (pump_freq_setting_ <= profile.pump_freq_min + params.pump_epsilon);
             bool temp_overshoot = (room_temp > target_temp + params.auto_shutdown_overshoot);
 
             if (pump_at_min && temp_overshoot && !in_auto_shutdown_) {

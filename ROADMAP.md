@@ -92,12 +92,18 @@ Recovery/decisions recorded in ISSUES.md.
 Remaining for this phase: owner ESPHome compile + bench flash (behavior
 must be identical), then Phase 4 opens the loop knobs to YAML.
 
-### Phase 4 — Tuning → YAML overrides (Option A) ☐
-Every `Tuning` key becomes an optional YAML override on top of the selected
-preset (`overrides:` block or flat keys). C++ setters applied only for keys
-present; members default to profile values. Structure errors (min ≥ max)
-hard-fail in cv; out-of-band values warn in logs. `number.py` defaults come
-from the active profile instead of disagreeing with it.
+### Phase 4 — Tuning → YAML overrides ● (code done 2026-10-24; bench flash pending)
+Done: per-key optional YAML overrides over the compiled preset, in two
+groups: (a) profile tuning (pump freq min/max/step/initial/prime, fan RPMs,
+HX thresholds, fan_sensor/glow_power bytes, temp range) — setters mutate the
+copied profile before setup(); (b) thermostat policy (adjust interval,
+priming duration, gap/overshoot thresholds + multipliers) — facade members
+threaded through Thermostat::Params. `validate_profile_invariants()` (pure,
+host-tested) reverts invariant-breaking combos to the preset at boot with a
+warning. NOT exposed: pump_epsilon (cannot discriminate — pinned by test),
+model-identity flags (heat_mode_manual, ecm_owned_safety, has_*_control),
+protocol timing (drivers), RoomSensorGuard constants (sensor facts).
+Verification: tests 81/586 ✔, stub-check ✔, owner compile ☐, bench ☐.
 
 ### Phase 5 — new-heater checklist ☐ (the maintainability payoff)
 Adding heater N = one profile factory (+ YAML overrides), one enum entry,

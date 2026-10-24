@@ -93,6 +93,22 @@ heater_uart:
     #     oversees combustion). Only honoured on heaters whose ECM handles its own safety
     #     (currently the Vevor profiles); ignored with a warning on the 8kW, where the
     #     firmware is the low-combustion-temperature safeguard.
+    #
+    # --- Tuning overrides (ROADMAP Phase 4) - all optional; anything omitted
+    # keeps the selected model's compiled preset. Combos that would break a
+    # profile invariant (e.g. pump_freq_min >= pump_freq_max) are reverted to
+    # the preset at boot with a warning.
+    # pump_freq_min: 0.6          # soot-safe floor (Hz)
+    # pump_freq_max: 2.3          # flame ceiling (Hz)
+    # pump_freq_step: 0.1         # thermostat step (Hz)
+    # pump_freq_initial: 1.0      # ignition start rate (Hz)
+    # pump_prime_freq: 2.5        # priming rate (Hz)
+    # hx_temp_low: 145.0          # soot-prevention floor (°C)
+    # hx_temp_critical: 205.0     # emergency-stop (°C)
+    # pump_adjust_interval: 5     # s between thermostat adjustments
+    # priming_duration: 60        # s pump-only prime run
+    # thermostat_gap_far: 5.0     # °C gap threshold for the far multiplier
+    # thermostat_os_mid: 0.5      # °C overshoot threshold for the mid reduction
 
 select:
   - platform: heater_uart
