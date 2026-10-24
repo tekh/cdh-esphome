@@ -35,36 +35,42 @@ ESPHome external component for UART communication with diesel heaters (BDAP 24-b
 
 | Task | Location | Notes |
 |------|----------|-------|
-| Add sensor | `sensor.py` + `heater_uart.cpp` | Add to both Python and C++ |
-| Modify frame parsing | `heater_uart.cpp:parse_rx_frame()` (BDAP) / `parse_vevor_rx_frame()` (Vevor) | Byte positions match hardware protocol |
+| Add sensor | `sensor.py` + owning driver's `parse_frame()` + facade `update()` | Telemetry field + publish key |
+| Modify frame parsing | `bdap_driver.cpp:parse_frame()` / `vevor_driver.cpp:parse_frame()` | Byte positions pinned by `tests/` |
 | Add control entity | `number.py`/`select.py` + corresponding `.h/.cpp` | Follow HeaterNumber pattern |
-| Thermostat logic | `heater_uart.cpp:standalone_loop()` | Auto mode, cooldown, pump control |
-| Standalone RX parsing | `heater_uart.cpp:parse_rx_frame()` | 24-byte RX frame in standalone mode |
-| TX frame construction | `heater_uart.cpp:build_tx_frame()` | Build 24-byte TX frame for heater |
-| Fuel priming | `heater_uart.cpp:start_priming()`/`stop_priming()` | 60s pump-only run for bleeding air |
-| State mappings | `heater_uart.cpp` static maps | `run_state_map`, `error_code_map` |
-| **Tune pump/fan/HX for a heater** | **`heater_profile.h`** | Per-model preset profiles, selected by `heater_model:` YAML key |
-| Add a heater model | `heater_profile.h` + `__init__.py` + README table | Enum entry, preset factory, `cv.enum` mapping |
+| Thermostat logic | `heater_policies.cpp:Thermostat::control()` | AUTO/HEAT machine, host-tested |
+| Mode entry decisions | `heater_policies.cpp:Thermostat::enter_mode()` | Shares threshold with control |
+| Combustion safety | `heater_policies.cpp:CombustionSafety` | HX overrides, BDAP fan, cooldown |
+| Room-sensor guard | `heater_policies.cpp:RoomSensorGuard` | Boot consensus, glitch, staleness |
+| TX frame construction | `bdap_driver.cpp:build_frame()` / `vevor_driver.cpp:build_frame()` | Framing + encode |
+| Fuel-domain conversion | `heater_output.h` | normalized ↔ Hz ↔ level, one definition |
+| Fuel priming | `heater_uart.cpp:start_priming()/stop_priming()` | BDAP-only (Vevor refuses) |
+| State mappings | `bdap_driver.cpp` / `vevor_driver.cpp` | run-state names, error tables |
+| **Tune pump/fan/HX for a heater** | **`heater_profile.h` preset or per-key YAML overrides** | Overrides revert-to-preset when invariant-breaking |
+| Add a heater model | `heater_profile.h` + `__init__.py` + README table | Enum entry, preset factory, `cv.enum` mapping; new protocol = one driver |
 
 ## CODE MAP
 
 | Symbol | Type | Location | Role |
 |--------|------|----------|------|
-| `HeaterUart` | class | `heater_uart.h:84` | Main component - frame parsing, control |
-| `HeaterMode` | enum | `heater_uart.h:21` | OFF, AUTO, ON modes |
-| `parse_frame()` | method | *removed 2026-10-24 with the LCD injection path; see tag `lcd-injection-final`* | |
-| `standalone_loop()` | method | `heater_uart.cpp:443` | Thermostat control logic (standalone mode) |
-| `build_tx_frame()` | method | `heater_uart.cpp:507` | Construct TX frame for heater |
-| `send_standalone_frame()` | method | `heater_uart.cpp:611` | Send frame and manage RX timeout |
-| `parse_rx_frame()` | method | `heater_uart.cpp:661` | Parse 24-byte RX frame in standalone mode |
-| `start_priming()` | method | `heater_uart.cpp:951` | Start fuel priming (60s pump-only) |
-| `stop_priming()` | method | `heater_uart.cpp:980` | Stop fuel priming |
+| `HeaterUart` | class | `heater_uart.h` | Facade: entities, mode intent, policy/driver wiring |
+| `HeaterMode` | enum | `heater_policies.h` | OFF, AUTO, ON modes (control vocabulary) |
+| `HeaterProtocolDriver` | interface | `heater_protocol_driver.h` | Protocol seam: ByteStream, Telemetry, ControlInputs |
+| `BdapDriver` | class | `bdap_driver.h/.cpp` | 0x76/0x16 framing, cadence, echo, CRC-16, TX build/parse |
+| `VevorDriver` | class | `vevor_driver.h/.cpp` | 0xAA/0x66 TX state machine, level encode + derate, RX decode |
+| `Thermostat` | class | `heater_policies.h/.cpp` | Control policy: three-phase AUTO, HEAT variants, shutdown/restart |
+| `CombustionSafety` | class | `heater_policies.h/.cpp` | Protection policy: HX overrides, BDAP fan, cooldown monitor |
+| `RoomSensorGuard` | class | `heater_policies.h/.cpp` | DHT22 physics guard: boot consensus, glitch, staleness |
+| `output_domain` | namespace | `heater_output.h` | The one fuel-domain conversion (host-tested) |
+| `start_priming()` | method | `heater_uart.cpp` | Start fuel priming (BDAP-only) |
+| `stop_priming()` | method | `heater_uart.cpp` | Stop fuel priming |
 
 ## CONVENTIONS
 
 **Heater Profiles:**
-- All heater-specific values (pump Hz, fan RPM, HX temps, glow power, temp range, priming rate) live ONLY in `heater_profile.h` presets
-- Control logic (`heater_uart.cpp`, entities) reads exclusively from `profile_.*` — never hardcoded values
+- All heater-specific values (pump Hz, fan RPM, HX temps, glow power, temp range, priming rate) live ONLY in `heater_profile.h` presets — with optional per-key YAML overrides that revert-to-preset when invariant-breaking
+- Thermostat policy constants (aggressiveness, cadence) live in `Thermostat::Params` defaults — YAML-overridable, never hardcoded in the .cpp
+- Control logic (`heater_policies.cpp`, `heater_uart.cpp`, entities) reads exclusively from `profile_.*` / `params.*` — never hardcoded values
 - `heater_model:` is REQUIRED in YAML — the profile is never implicit
 - `vevor_2kw` profile is PROVISIONAL until bench-validated (interfacing phase)
 
