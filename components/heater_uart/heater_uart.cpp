@@ -2,6 +2,8 @@
 #include "esphome/core/log.h"
 #include <cmath>
 
+#include "heater_output.h"
+
 namespace esphome {
 namespace heater_uart {
 
@@ -369,12 +371,10 @@ void HeaterUart::set_power_level(uint8_t level) {
     if (level > 10) level = 10;
 
     // The thermostat and the TX boundary both work in the Hz domain; the level
-    // is the honest unit for level-commanded hardware. Same mapping the TX
-    // boundary uses in reverse: level = 1 + round(ratio * 9).
-    float span = profile_.pump_freq_max - profile_.pump_freq_min;
-    float hz = profile_.pump_freq_min + (static_cast<float>(level - 1) / 9.0f) * span;
-    if (hz < profile_.pump_freq_min) hz = profile_.pump_freq_min;
-    if (hz > profile_.pump_freq_max) hz = profile_.pump_freq_max;
+    // is the honest unit for level-commanded hardware. Single shared mapping
+    // (output_domain, host-tested): level -> normalized fraction -> Hz.
+    const float hz = output_domain::hz_from_normalized(
+        output_domain::normalized_from_level(level), profile_);
 
     ESP_LOGI(TAG, "Setting power level %u (%.2f Hz equivalent on %s)", level, hz, profile_.name);
     set_pump_frequency(hz);
@@ -383,14 +383,11 @@ void HeaterUart::set_power_level(uint8_t level) {
 uint8_t HeaterUart::get_power_level_display() const {
     // Mirror the user's setpoint on manual-HEAT profiles (the ignition ramp
     // must not show up on the dial), otherwise the firmware's live request.
-    float hz = (profile_.heat_mode_manual && heater_mode_ == HeaterMode::ON)
-                   ? pump_freq_user_request_
-                   : pump_freq_setting_;
-    float span = profile_.pump_freq_max - profile_.pump_freq_min;
-    float ratio = (span > 0.0f) ? (hz - profile_.pump_freq_min) / span : 0.0f;
-    if (ratio < 0.0f) ratio = 0.0f;
-    if (ratio > 1.0f) ratio = 1.0f;
-    return static_cast<uint8_t>(1 + static_cast<int>(ratio * 9.0f + 0.5f));
+    const float hz = (profile_.heat_mode_manual && heater_mode_ == HeaterMode::ON)
+                         ? pump_freq_user_request_
+                         : pump_freq_setting_;
+    return output_domain::level_from_normalized(
+        output_domain::normalized_from_hz(hz, profile_));
 }
 
 void HeaterUart::set_heater_mode(HeaterMode mode) {
@@ -1282,9 +1279,9 @@ void HeaterUart::send_vevor_frame() {
         command = 0x06;           // start
         requested_state = 0x06;
         pending_on_off_command_ = CMD_NO_CHANGE;
-        ESP_LOGI(TAG, "VEVOR: sending START (power %d)", 1 + static_cast<uint8_t>(
-                    std::max(0.0f, std::min(1.0f, (pump_freq_setting_ - profile_.pump_freq_min) /
-                    (profile_.pump_freq_max - profile_.pump_freq_min))) * 9.0f + 0.5f));
+        ESP_LOGI(TAG, "VEVOR: sending START (power %d)", static_cast<int>(
+                    output_domain::level_from_normalized(
+                        output_domain::normalized_from_hz(pump_freq_setting_, profile_))));
     } else if (pending_on_off_command_ == CMD_STOP) {
         command = 0x06;           // stop
         requested_state = 0x05;
@@ -1319,10 +1316,9 @@ void HeaterUart::send_vevor_frame() {
     frame[7] = 0x00;
 
     // Power level 1-10, derived from the internal pump-frequency setting (Hz domain).
-    // The shared thermostat logic adjusts pump_freq_setting_; we convert at the boundary.
-    float ratio = (pump_freq_setting_ - profile_.pump_freq_min) /
-                  (profile_.pump_freq_max - profile_.pump_freq_min);
-    ratio = std::max(0.0f, std::min(1.0f, ratio));
+    // The shared thermostat logic adjusts pump_freq_setting_; we convert at the
+    // boundary through the single shared mapping (output_domain, host-tested).
+    float output = output_domain::normalized_from_hz(pump_freq_setting_, profile_);
 
     // Altitude / air-density derating (Vevor frames have no altitude field - unlike
     // BDAP where the heater self-derates - so the host must cut fuel itself).
@@ -1330,9 +1326,9 @@ void HeaterUart::send_vevor_frame() {
     // HX fouling, overheating). Derate the level by the ISA density ratio sigma(h),
     // applied only at stable combustion so ignition keeps its full requested rate.
     if (run_state_value_ == RUN_STATE_RUNNING) {
-        ratio = std::max(0.0f, std::min(1.0f, ratio * air_density_ratio(altitude_)));
+        output = output_domain::clamp01(output * air_density_ratio(altitude_));
     }
-    frame[8] = 1 + static_cast<uint8_t>(ratio * 9.0f + 0.5f);
+    frame[8] = output_domain::level_from_normalized(output);
 
     frame[9] = requested_state;
 
