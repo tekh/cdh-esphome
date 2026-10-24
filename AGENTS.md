@@ -6,7 +6,7 @@
 
 ## OVERVIEW
 
-ESPHome external component for UART communication with diesel heaters. Parses 48-byte frames to monitor/control temperature, fan speed, voltage, diagnostics. Supports standalone thermostat mode with auto-shutdown.
+ESPHome external component for UART communication with diesel heaters (BDAP 24-byte and Vevor 56/57-byte frames). Monitors/controls temperature, fan speed, voltage, diagnostics. Standalone thermostat mode with auto-shutdown — the only mode since the LCD injection path was removed (recover via git tag `lcd-injection-final`).
 
 ## STRUCTURE
 
@@ -36,7 +36,7 @@ ESPHome external component for UART communication with diesel heaters. Parses 48
 | Task | Location | Notes |
 |------|----------|-------|
 | Add sensor | `sensor.py` + `heater_uart.cpp` | Add to both Python and C++ |
-| Modify frame parsing | `heater_uart.cpp:parse_frame()` | Byte positions match hardware protocol |
+| Modify frame parsing | `heater_uart.cpp:parse_rx_frame()` (BDAP) / `parse_vevor_rx_frame()` (Vevor) | Byte positions match hardware protocol |
 | Add control entity | `number.py`/`select.py` + corresponding `.h/.cpp` | Follow HeaterNumber pattern |
 | Thermostat logic | `heater_uart.cpp:standalone_loop()` | Auto mode, cooldown, pump control |
 | Standalone RX parsing | `heater_uart.cpp:parse_rx_frame()` | 24-byte RX frame in standalone mode |
@@ -52,7 +52,7 @@ ESPHome external component for UART communication with diesel heaters. Parses 48
 |--------|------|----------|------|
 | `HeaterUart` | class | `heater_uart.h:84` | Main component - frame parsing, control |
 | `HeaterMode` | enum | `heater_uart.h:21` | OFF, AUTO, ON modes |
-| `parse_frame()` | method | `heater_uart.cpp:208` | Parse 48-byte UART frame (LCD mode) |
+| `parse_frame()` | method | *removed 2026-10-24 with the LCD injection path; see tag `lcd-injection-final`* | |
 | `standalone_loop()` | method | `heater_uart.cpp:443` | Thermostat control logic (standalone mode) |
 | `build_tx_frame()` | method | `heater_uart.cpp:507` | Construct TX frame for heater |
 | `send_standalone_frame()` | method | `heater_uart.cpp:611` | Send frame and manage RX timeout |
@@ -69,12 +69,10 @@ ESPHome external component for UART communication with diesel heaters. Parses 48
 - `vevor_2kw` profile is PROVISIONAL until bench-validated (interfacing phase)
 
 **UART Protocol:**
-- LCD mode: 48-byte frames: TX (bytes 0-23) + RX (bytes 24-47)
-- Standalone mode: Separate 24-byte TX and RX frames
-- Start marker: `0x76` at bytes 0 and 24
-- End marker: `0x00` at bytes 21 and 45
-- Baud rate: 25000 (heater-specific)
-- Big-endian multi-byte: `(high << 8) | low`
+- Standalone-only since 2026-10-24 (LCD injection path removed; tag `lcd-injection-final`)
+- BDAP: 24-byte TX and RX frames (`0x76` start, CRC-16/MODBUS bytes 22-23), 25000 baud
+- Vevor: 16-byte TX / 56-57-byte RX frames (`0xAA 0x66` / `0xAA 0x77`, additive checksum), 4800 baud inverted
+- Big-endian multi-byte: `(high << 8) | low`; Vevor HX temp is a signed int16 × 0.1 °C
 
 **Sensor Registration:**
 - Python calls `parent.set_sensor(key, sensor)` during setup
@@ -95,8 +93,7 @@ uart:
   rx_buffer_size: 512
 
 heater_uart:
-  heater_model: jeabong_8kw  # or vevor_2kw - required, selects the profile + protocol
-  standalone_mode: true  # For thermostat control
+  heater_model: jeabong_8kw  # or vevor_2kw / vevor_2kw_v2 - required, selects the profile + protocol
   operating_voltage: "12V"  # or "24V"
 ```
 
@@ -125,7 +122,7 @@ heater_uart:
 3. Add a setter in `heater_uart.h` and register the entity schema in the platform module
 
 **Modifying Frame Parsing:**
-- BDAP: `parse_frame()`/`parse_rx_frame()` - 0x76/0x16 24-byte frames @ 25000 baud
+- BDAP: `parse_rx_frame()` - 0x76/0x16 24-byte frames @ 25000 baud
 - Vevor: `parse_vevor_rx_frame()` - 0xAA/0x77 56-byte frames @ 4800 baud (additive checksum)
 - Multi-byte values are big-endian: `(high << 8) | low`. Vevor HX temp is a **signed** int16 × 0.1 °C
 - Vevor link-layer details: `@notes/vevor-protocol.md`
@@ -149,6 +146,6 @@ esphome compile config.yaml
 ## NOTES
 
 - `@notes/` contains reference implementation (bluetoothheater-master) - read-only
-- Standalone mode: ESP32 is controller, sends frames at 1Hz
-- LCD mode: Passive monitoring of existing controller-heater communication
+- Standalone mode (the only mode): ESP32 is controller, sends frames at 1Hz
+- LCD injection mode: REMOVED 2026-10-24 (untested, abandoned; code under tag `lcd-injection-final`)
 - Auto mode uses external temp sensor (recommended) or heat exchanger temp as fallback

@@ -60,6 +60,11 @@ static const uint16_t DEFAULT_ALTITUDE = 0x02EE;      // 750m
 static const uint32_t STANDALONE_TX_INTERVAL_MS = 1000;  // 1 Hz
 static const uint32_t STANDALONE_RX_TIMEOUT_MS = 200;    // Wait for response (heater responds in ~100-130ms)
 
+// Fuel priming run length (60 s pump-only). Shared by both protocol loops;
+// hoisted here 2026-10-24 when the duplicated copies were unified. Moves into
+// Tuning/YAML at Phase 3 of the refactor (ROADMAP.md).
+static const uint32_t PRIMING_DURATION_MS = 60000;
+
 class HeaterUart : public PollingComponent, public uart::UARTDevice {
  public:
   HeaterUart() = default;
@@ -77,7 +82,6 @@ class HeaterUart : public PollingComponent, public uart::UARTDevice {
 
   // Configuration setters
   void set_heater_model(HeaterModel model) { this->profile_ = profile_for(model); }
-  void set_standalone_mode(bool standalone) { this->standalone_mode_ = standalone; }
   void set_operating_voltage(uint8_t voltage) { this->operating_voltage_ = voltage; }
   void set_temperature_backoff(float offset) { this->temp_backoff_offset_ = offset; }
   void set_altitude(uint16_t altitude) { this->altitude_ = altitude; }
@@ -132,7 +136,6 @@ class HeaterUart : public PollingComponent, public uart::UARTDevice {
   bool refresh_room_temperature();
   float get_current_temperature() const { return current_temperature_value_; }
   float get_pump_frequency_setting() const { return pump_freq_setting_; }
-  bool is_standalone_mode() const { return standalone_mode_; }
   bool is_in_auto_shutdown() const { return in_auto_shutdown_; }
   bool is_in_standby() const { return in_standby_; }
   HeaterMode get_heater_mode() const { return heater_mode_; }
@@ -187,27 +190,9 @@ class HeaterUart : public PollingComponent, public uart::UARTDevice {
   // clobbered by the ignition warm-up ramp).
   float pump_freq_user_request_ = 1.6f;
 
-  // Frame handling
-  uint8_t frame_[48];
-  int frame_index_ = 0;
-  bool waiting_for_start_ = true;
-
-  // Store last TX frame from LCD controller (for command injection)
-  uint8_t last_tx_frame_[24];
-  bool has_valid_tx_frame_ = false;
-
-  // Pending command to inject (0x00 = none)
-  uint8_t pending_command_ = CMD_NO_CHANGE;
-
-  // Pending temperature to inject (0 = none, valid range 8-35)
-  uint8_t pending_temperature_ = 0;
-
-  // Track if we just sent a command (to handle heater's response)
-  bool awaiting_inject_response_ = false;
-  uint32_t inject_response_timeout_ = 0;
-
-  // Standalone mode settings
-  bool standalone_mode_ = false;
+  // --- Standalone mode (the ONLY mode since the LCD injection path was
+  // removed 2026-10-24; recover the old sniff/inject code from the git tag
+  // `lcd-injection-final`) ---
   uint8_t operating_voltage_ = VOLTAGE_12V;
   uint16_t altitude_ = 750;              // Altitude in metres (affects combustion)
   float desired_temp_setting_ = 19.0f;  // Our desired temperature (for standalone). 2026-10-20: default 22.0 -> 19.0 (post-reboot state; mode default is already OFF)
@@ -268,10 +253,7 @@ class HeaterUart : public PollingComponent, public uart::UARTDevice {
   std::string run_state_description_ = "Unknown";
   std::string error_code_description_ = "Unknown";
 
-  void parse_frame(const uint8_t *frame, size_t length);
   void parse_rx_frame(const uint8_t *frame, size_t length);
-  void reset_frame();
-  void send_command(uint8_t command, uint8_t temperature = 0);
   uint16_t calc_crc16(const uint8_t *data, size_t length);
 
   // Standalone mode methods

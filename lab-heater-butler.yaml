@@ -79,7 +79,8 @@ heater_uart:
     # REVERT (one line, then reflash): 'vevor_2kw' = v1 2kW (firmware modulates
     # HEAT), 'jeabong_8kw' = the 8kW BDAP heater (real pump-Hz + fan control).
     heater_model: vevor_2kw_v2
-    standalone_mode: true
+    # Standalone is the only mode since 2026-10-24 (the `standalone_mode:` key is
+    # gone; LCD injection code lives under git tag lcd-injection-final).
     operating_voltage: 12V  # or 24V depending on your heater
     temperature_sensor: dht22_temperature  # DHT22 for room temperature in standalone mode
     temperature_backoff: 0.5  # Start ramping down pump this many °C before target

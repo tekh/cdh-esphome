@@ -19,16 +19,18 @@ ESPHome component for diesel heater UART communication.
 ## ADDING ENTITIES
 
 1. **Python**: Add schema in `*.py`, call `parent.set_X(key, entity)`
-2. **C++**: Add member + setter in `heater_uart.h`, parse in `parse_frame()`, publish in `update()`
+2. **C++**: Add member + setter in `heater_uart.h`, parse in `parse_rx_frame()` (BDAP) or `parse_vevor_rx_frame()` (Vevor), publish in `update()`
 
-## FRAME LAYOUT
+## FRAME LAYOUT (standalone mode, the only mode since the LCD injection path was removed 2026-10-24)
 
 ```
-TX [0-23]:  0x76 | cmd | temp | ... | 0x00 | CRC
-RX [24-47]: 0x76 | run_state | error | sensors... | 0x00 | CRC
+BDAP   TX 24B:  0x76 0x16 | cmd | temps | pump Hz | fan RPM | ... | CRC16
+BDAP   RX 24B:  0x76 0x16 | run_state | error | sensors... | CRC16
+Vevor  TX 16B:  0xAA 0x66 | cmd | 0x0B | ... | power 1-10 | state | ... | additive csum
+Vevor  RX 56/57B: 0xAA 0x77 | ... | level | HX (int16 x0.1C) | pump | fan | ... | csum
 ```
 
-Key byte positions defined in `heater_uart.cpp:parse_frame()`.
+Key byte positions defined in `heater_uart.cpp:parse_rx_frame()` / `parse_vevor_rx_frame()`.
 
 ## THERMOSTAT (standalone_loop)
 

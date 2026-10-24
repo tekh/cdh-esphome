@@ -36,13 +36,9 @@ This project is a custom ESPHome component designed to interface with heaters us
 - **Mappings for Readability**:
   - Human-readable descriptions for error codes and run states.
 
-## Operational Modes
+## Operational Mode: Standalone (the only mode)
 
-This component supports two operational modes:
-
-### Standalone Mode (Primary)
-
-In standalone mode, the ESP32 acts as the primary heater controller with full control capabilities:
+The ESP32 acts as the primary heater controller with full control capabilities:
 
 - **Full Control**: ESP32 sends UART frames to the heater at 1 Hz intervals
 - **Thermostat Operation**: Automatic temperature control with intelligent heating/cooling cycles
@@ -51,23 +47,17 @@ In standalone mode, the ESP32 acts as the primary heater controller with full co
 - **Multi-Model Support**: Selectable heater profile (see below) - pump/fan/HX limits adapt to the connected heater
 - **Safety Features**: Built-in cooldown sequences and heat exchanger temperature protection
 
-Enable standalone mode in your configuration:
 ```yaml
 heater_uart:
-  standalone_mode: true
+  heater_model: vevor_2kw  # required - which heater is connected
   operating_voltage: "12V"  # or "24V"
   temperature_sensor: external_temp_sensor_id  # Optional but recommended
 ```
 
-### LCD Controller Mode (Alternative)
-
-In this mode, the ESP32 monitors the UART communication between an existing LCD controller and the heater:
-
-- **Monitoring Only**: Reads and parses UART frames without interfering
-- **No Control**: Control entities are not available
-- **Passive Operation**: Suitable for adding smart home integration to existing setups
-
-This is the default mode when `standalone_mode` is not specified or set to `false`.
+> **LCD Controller Mode (passive sniffing of an existing LCD controller ↔ heater bus)
+> was removed 2026-10-24** — abandoned before it was ever validated against real
+> hardware (no BDAP device target). The last code carrying it lives under the git tag
+> `lcd-injection-final` if it is ever needed again.
 
 ## Heater Models
 
@@ -152,7 +142,6 @@ Fine-tune the Auto mode behavior with these parameters:
 Example configuration:
 ```yaml
 heater_uart:
-  standalone_mode: true
   auto_shutdown_overshoot: 0.0
   auto_shutdown_hysteresis: 1.0
   approach_threshold: 1.0
@@ -247,7 +236,6 @@ heater_uart:
   update_interval: 5s
   id: heater
   heater_model: jeabong_8kw  # required - jeabong_8kw or vevor_2kw
-  standalone_mode: true
   operating_voltage: "12V"  # or "24V" depending on your heater
   altitude: 750  # meters above sea level
   auto_shutdown_overshoot: 0.0  # °C above target before shutdown (0.0 = at the setpoint)

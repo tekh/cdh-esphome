@@ -10,7 +10,6 @@ DEPENDENCIES = ["uart"]
 
 # Configuration keys
 CONF_HEATER_MODEL = "heater_model"
-CONF_STANDALONE_MODE = "standalone_mode"
 CONF_OPERATING_VOLTAGE = "operating_voltage"
 CONF_TEMPERATURE_SENSOR = "temperature_sensor"
 CONF_TEMPERATURE_BACKOFF = "temperature_backoff"
@@ -35,12 +34,10 @@ CONFIG_SCHEMA = cv.Schema(
         cv.Optional("update_interval", default="5s"): cv.update_interval,
         # Required: which physical heater is connected. The selected profile
         # drives pump/fan/HX limits -> never leave this implicit.
-        cv.Required(CONF_HEATER_MODEL): cv.enum(
-            {"jeabong_8kw": HeaterModel.JEABONG_8KW, "vevor_2kw": HeaterModel.VEVOR_2KW,
+        cv.Required(CONF_HEATER_MODEL): cv.enum(            {"jeabong_8kw": HeaterModel.JEABONG_8KW, "vevor_2kw": HeaterModel.VEVOR_2KW,
              "vevor_2kw_v2": HeaterModel.VEVOR_2KW_V2},
             lower=True,
         ),
-        cv.Optional(CONF_STANDALONE_MODE, default=False): cv.boolean,
         cv.Optional(CONF_OPERATING_VOLTAGE, default="12V"): cv.enum(
             {"12V": VOLTAGE_12V, "24V": VOLTAGE_24V}, upper=True
         ),
@@ -62,9 +59,9 @@ async def to_code(config):
     if "update_interval" in config:
         cg.add(var.set_update_interval(config["update_interval"]))
 
-    # Configure standalone mode
+    # Configure the heater model (standalone is the only mode since the LCD
+    # injection path was removed 2026-10-24; recover via tag lcd-injection-final)
     cg.add(var.set_heater_model(config[CONF_HEATER_MODEL]))
-    cg.add(var.set_standalone_mode(config[CONF_STANDALONE_MODE]))
     cg.add(var.set_operating_voltage(config[CONF_OPERATING_VOLTAGE]))
     cg.add(var.set_temperature_backoff(config[CONF_TEMPERATURE_BACKOFF]))
     cg.add(var.set_altitude(config[CONF_ALTITUDE]))

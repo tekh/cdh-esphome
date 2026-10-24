@@ -70,101 +70,33 @@ const std::map<int, std::string> HeaterUart::vevor_error_map = {
 
 void HeaterUart::setup() {
     ESP_LOGCONFIG(TAG, "Setting up Heater UART...");
-    memset(last_tx_frame_, 0, sizeof(last_tx_frame_));
     memset(rx_frame_, 0, sizeof(rx_frame_));
 
     // Re-apply the profile selected by `heater_model:` (fallback: 8kW defaults).
     // NOTE: ambient heat limit is NOT reset here - it comes from YAML only.
     this->profile_ = profile_for(this->profile_.model);
 
-    if (standalone_mode_) {
-        // Start the pump at the profile's ignition rate
-        pump_freq_setting_ = profile_.pump_freq_initial;
+    // Start the pump at the profile's ignition rate
+    pump_freq_setting_ = profile_.pump_freq_initial;
 
-        ESP_LOGI(TAG, "Running in STANDALONE mode - ESP32 is the heater controller");
-        ESP_LOGI(TAG, "Heater model: %s | pump %.1f-%.1f Hz | fan %u-%u RPM | HX critical %.0f C | temp %u-%u C",
-                 profile_.name, profile_.pump_freq_min, profile_.pump_freq_max,
-                 profile_.fan_rpm_min, profile_.fan_rpm_max, profile_.hx_temp_critical,
-                 profile_.temp_min, profile_.temp_max);
-        ESP_LOGI(TAG, "Protocol: %s @ %u baud (inverted: %s)",
-                 profile_.protocol == HeaterProtocol::VEVOR_UART ? "VEVOR-UART (0xAA/0x66)"
-                                                                 : "BDAP (0x76/0x16)",
-                 (unsigned) profile_.uart_baud_rate, profile_.uart_inverted ? "yes" : "no");
-        ESP_LOGI(TAG, "Operating voltage: %s", operating_voltage_ == VOLTAGE_12V ? "12V" : "24V");
-        ESP_LOGI(TAG, "Altitude: %d m", altitude_);
-        ESP_LOGI(TAG, "Initial desired temperature: %.1f°C", desired_temp_setting_);
-    } else {
-        ESP_LOGI(TAG, "Running in INJECTION mode - working alongside LCD controller");
-    }
+    ESP_LOGI(TAG, "Running in STANDALONE mode - ESP32 is the heater controller");
+    ESP_LOGI(TAG, "Heater model: %s | pump %.1f-%.1f Hz | fan %u-%u RPM | HX critical %.0f C | temp %u-%u C",
+             profile_.name, profile_.pump_freq_min, profile_.pump_freq_max,
+             profile_.fan_rpm_min, profile_.fan_rpm_max, profile_.hx_temp_critical,
+             profile_.temp_min, profile_.temp_max);
+    ESP_LOGI(TAG, "Protocol: %s @ %u baud (inverted: %s)",
+             profile_.protocol == HeaterProtocol::VEVOR_UART ? "VEVOR-UART (0xAA/0x66)"
+                                                             : "BDAP (0x76/0x16)",
+             (unsigned) profile_.uart_baud_rate, profile_.uart_inverted ? "yes" : "no");
+    ESP_LOGI(TAG, "Operating voltage: %s", operating_voltage_ == VOLTAGE_12V ? "12V" : "24V");
+    ESP_LOGI(TAG, "Altitude: %d m", altitude_);
+    ESP_LOGI(TAG, "Initial desired temperature: %.1f°C", desired_temp_setting_);
 }
 
 void HeaterUart::loop() {
-    // Use different loop logic depending on mode
-    if (standalone_mode_) {
-        standalone_loop();
-        return;
-    }
-
-    // === INJECTION MODE (original logic) ===
-    const int FRAME_SIZE = 48;
-    const int TX_FRAME_END_INDEX = 23;
-    const int RX_FRAME_START_INDEX = 24;
-    const uint8_t END_OF_FRAME_MARKER = 0x00;
-
-    // Handle timeout for awaiting inject response
-    if (awaiting_inject_response_ && millis() > inject_response_timeout_) {
-        ESP_LOGW(TAG, "Inject response timeout - returning to normal operation");
-        awaiting_inject_response_ = false;
-        reset_frame();
-    }
-
-    // If awaiting inject response, discard incoming bytes until timeout
-    if (awaiting_inject_response_) {
-        while (available()) {
-            read();  // Discard heater's response to our injected command
-        }
-        return;
-    }
-
-    while (available()) {
-        uint8_t byte = read();
-        if (waiting_for_start_) {
-            if (byte == 0x76) {
-                frame_[frame_index_++] = byte;
-                waiting_for_start_ = false;
-            }
-        } else {
-            frame_[frame_index_++] = byte;
-            if (frame_index_ == TX_FRAME_END_INDEX + 1) {
-                if (frame_[21] == END_OF_FRAME_MARKER) {
-                    ESP_LOGW(TAG, "Invalid Transmit Packet. Resetting frame.");
-                    reset_frame();
-                    return;
-                }
-            }
-            if (frame_index_ == FRAME_SIZE) {
-                if (frame_[45] == END_OF_FRAME_MARKER && frame_[RX_FRAME_START_INDEX] == 0x76) {
-                    // Store the LCD's TX frame for potential command injection
-                    memcpy(last_tx_frame_, frame_, 24);
-                    has_valid_tx_frame_ = true;
-
-                    parse_frame(frame_, FRAME_SIZE);
-
-                    // Check if we have a pending command or temperature to inject
-                    if ((pending_command_ != CMD_NO_CHANGE || pending_temperature_ != 0) && has_valid_tx_frame_) {
-                        ESP_LOGI(TAG, "Injecting frame - command: 0x%02X, temperature: %d",
-                                 pending_command_, pending_temperature_);
-                        send_command(pending_command_, pending_temperature_);
-                        pending_command_ = CMD_NO_CHANGE;
-                        pending_temperature_ = 0;
-                    }
-                } else {
-                    ESP_LOGW(TAG, "Invalid Receive Packet or incorrect order. Resetting frame.");
-                }
-                reset_frame();
-            }
-        }
-    }
+    // Standalone is the only mode since the LCD sniff/injection path was removed
+    // (2026-10-24; old code recoverable from the git tag `lcd-injection-final`).
+    standalone_loop();
 }
 
 void HeaterUart::update() {
@@ -246,42 +178,6 @@ void HeaterUart::update() {
     }
 }
 
-void HeaterUart::parse_frame(const uint8_t *frame, size_t length) {
-    if (length != 48) {
-        ESP_LOGW(TAG, "Invalid frame length: %d bytes (expected 48)", length);
-        return;
-    }
-
-    const uint8_t *command_frame = &frame[0];
-    const uint8_t *response_frame = &frame[24];
-
-    current_temperature_value_ = command_frame[3];
-    desired_temperature_value_ = command_frame[4];
-    fan_speed_value_ = (response_frame[6] << 8) | response_frame[7];
-    supply_voltage_value_ = ((response_frame[4] << 8) | response_frame[5]) * 0.1;
-    heat_exchanger_temp_value_ = ((response_frame[10] << 8) | response_frame[11]);
-    glow_plug_voltage_value_ = ((response_frame[12] << 8) | response_frame[13]) * 0.1;
-    glow_plug_current_value_ = ((response_frame[14] << 8) | response_frame[15]) * 0.01;
-    pump_frequency_value_ = response_frame[16] * 0.1;
-    fan_voltage_value_ = ((response_frame[8] << 8) | response_frame[9]) * 0.1;
-    run_state_value_ = response_frame[2];
-    on_off_value_ = response_frame[3] == 1;
-    error_code_value_ = response_frame[17];
-
-    run_state_description_ = run_state_map.count(run_state_value_)
-                                ? run_state_map.at(run_state_value_)
-                                : "Unknown Run State";
-
-    error_code_description_ = error_code_map.count(error_code_value_)
-                                ? error_code_map.at(error_code_value_)
-                                : "Unknown Error Code";
-}
-
-void HeaterUart::reset_frame() {
-    frame_index_ = 0;
-    waiting_for_start_ = true;
-}
-
 void HeaterUart::set_sensor(const std::string &key, sensor::Sensor *sensor) {
     sensors_[key] = sensor;
 }
@@ -295,39 +191,21 @@ void HeaterUart::set_binary_sensor(const std::string &key, binary_sensor::Binary
 }
 
 void HeaterUart::turn_on() {
-    if (standalone_mode_) {
-        ESP_LOGI(TAG, "Queuing START command (standalone mode)");
-        pending_on_off_command_ = CMD_START;
-        heater_on_request_ = true;
-        // Set pump to initial ignition frequency - will ramp up after flame stabilizes
-        pump_freq_setting_ = profile_.pump_freq_initial;
-        last_pump_adjust_time_ = millis();  // Reset adjustment timer
-        ESP_LOGI(TAG, "Pump frequency set to %.1f Hz for ignition", pump_freq_setting_);
-    } else {
-        if (!has_valid_tx_frame_) {
-            ESP_LOGW(TAG, "Cannot turn on - no valid TX frame captured yet");
-            return;
-        }
-        ESP_LOGI(TAG, "Queuing START command (injection mode)");
-        pending_command_ = CMD_START;
-    }
+    ESP_LOGI(TAG, "Queuing START command");
+    pending_on_off_command_ = CMD_START;
+    heater_on_request_ = true;
+    // Set pump to initial ignition frequency - will ramp up after flame stabilizes
+    pump_freq_setting_ = profile_.pump_freq_initial;
+    last_pump_adjust_time_ = millis();  // Reset adjustment timer
+    ESP_LOGI(TAG, "Pump frequency set to %.1f Hz for ignition", pump_freq_setting_);
 }
 
 void HeaterUart::turn_off() {
-    if (standalone_mode_) {
-        ESP_LOGI(TAG, "Queuing STOP command (standalone mode) - entering cooldown");
-        pending_on_off_command_ = CMD_STOP;
-        heater_on_request_ = false;
-        in_cooldown_ = true;  // Start cooldown sequence
-        in_auto_shutdown_ = false;  // Manual turn off clears auto-shutdown state
-    } else {
-        if (!has_valid_tx_frame_) {
-            ESP_LOGW(TAG, "Cannot turn off - no valid TX frame captured yet");
-            return;
-        }
-        ESP_LOGI(TAG, "Queuing STOP command (injection mode)");
-        pending_command_ = CMD_STOP;
-    }
+    ESP_LOGI(TAG, "Queuing STOP command - entering cooldown");
+    pending_on_off_command_ = CMD_STOP;
+    heater_on_request_ = false;
+    in_cooldown_ = true;  // Start cooldown sequence
+    in_auto_shutdown_ = false;  // Manual turn off clears auto-shutdown state
 }
 
 void HeaterUart::set_desired_temperature(float temperature) {
@@ -339,18 +217,9 @@ void HeaterUart::set_desired_temperature(float temperature) {
         return;
     }
 
-    if (standalone_mode_) {
-        ESP_LOGI(TAG, "Setting desired temperature to %.1f°C (standalone mode)", rounded);
-        desired_temp_setting_ = rounded;
-        // Temperature will be sent in next frame automatically
-    } else {
-        if (!has_valid_tx_frame_) {
-            ESP_LOGW(TAG, "Cannot set temperature - no valid TX frame captured yet");
-            return;
-        }
-        ESP_LOGI(TAG, "Queuing temperature change to %.1f°C (injection mode)", rounded);
-        pending_temperature_ = static_cast<uint8_t>(std::round(rounded));
-    }
+    ESP_LOGI(TAG, "Setting desired temperature to %.1f°C", rounded);
+    desired_temp_setting_ = rounded;
+    // Temperature will be sent in next frame automatically
 }
 
 void HeaterUart::set_pump_frequency(float frequency) {
@@ -391,7 +260,6 @@ uint8_t HeaterUart::get_power_level_display() const {
 }
 
 void HeaterUart::set_heater_mode(HeaterMode mode) {
-    HeaterMode old_mode = heater_mode_;
     heater_mode_ = mode;
 
     const char *mode_str = (mode == HeaterMode::OFF) ? "Off" :
@@ -467,52 +335,6 @@ void HeaterUart::set_heater_mode(HeaterMode mode) {
     }
 }
 
-void HeaterUart::send_command(uint8_t command, uint8_t temperature) {
-    uint8_t tx_frame[24];
-
-    // Copy the last LCD TX frame as base
-    memcpy(tx_frame, last_tx_frame_, 24);
-
-    // Modify the command byte (byte 2) if not CMD_NO_CHANGE
-    if (command != CMD_NO_CHANGE) {
-        tx_frame[2] = command;
-    }
-
-    // Modify the temperature byte (byte 4) if specified (non-zero)
-    if (temperature != 0) {
-        tx_frame[4] = temperature;
-    }
-
-    // Recalculate CRC-16/MODBUS for bytes 0-21
-    uint16_t crc = calc_crc16(tx_frame, 22);
-
-    // CRC is stored as MSB first in the protocol
-    tx_frame[22] = (crc >> 8) & 0xFF;
-    tx_frame[23] = crc & 0xFF;
-
-    // Log the frame being sent
-    ESP_LOGI(TAG, "Sending command frame:");
-    ESP_LOGI(TAG, "  Bytes 0-7:   %02X %02X %02X %02X %02X %02X %02X %02X",
-             tx_frame[0], tx_frame[1], tx_frame[2], tx_frame[3],
-             tx_frame[4], tx_frame[5], tx_frame[6], tx_frame[7]);
-    ESP_LOGI(TAG, "  Bytes 8-15:  %02X %02X %02X %02X %02X %02X %02X %02X",
-             tx_frame[8], tx_frame[9], tx_frame[10], tx_frame[11],
-             tx_frame[12], tx_frame[13], tx_frame[14], tx_frame[15]);
-    ESP_LOGI(TAG, "  Bytes 16-23: %02X %02X %02X %02X %02X %02X %02X %02X",
-             tx_frame[16], tx_frame[17], tx_frame[18], tx_frame[19],
-             tx_frame[20], tx_frame[21], tx_frame[22], tx_frame[23]);
-
-    // Send the frame
-    write_array(tx_frame, 24);
-    flush();
-
-    // Set up to ignore the heater's response (timeout after 50ms)
-    awaiting_inject_response_ = true;
-    inject_response_timeout_ = millis() + 50;
-
-    ESP_LOGI(TAG, "Command sent, awaiting response timeout");
-}
-
 uint16_t HeaterUart::calc_crc16(const uint8_t *data, size_t length) {
     uint16_t crc = 0xFFFF;
     for (size_t i = 0; i < length; i++) {
@@ -527,19 +349,30 @@ uint16_t HeaterUart::calc_crc16(const uint8_t *data, size_t length) {
 void HeaterUart::standalone_loop() {
     uint32_t now = millis();
 
+    // === AMBIENT HEAT LIMIT CHECK (HEAT Mode ONLY) ===
+    // Shared by both protocols (was duplicated in the BDAP and Vevor loops
+    // before 2026-10-24 - copies had begun to drift in formatting).
+    if (heater_mode_ == HeaterMode::ON && current_temperature_value_ > ambient_heat_limit_) {
+        ESP_LOGW(TAG, "Ambient Limit Exceeded in HEAT mode: Room %.1f°C > Limit %.1f°C. Forcing shutdown.",
+                 current_temperature_value_, ambient_heat_limit_);
+        pending_on_off_command_ = CMD_STOP;
+        in_cooldown_ = true;  // Start cooldown sequence immediately
+    }
+
+    // Priming timeout (shared by both protocols; duration: PRIMING_DURATION_MS)
+    if (is_priming_ && (now - priming_start_time_ >= PRIMING_DURATION_MS)) {
+        ESP_LOGI(TAG, "Fuel priming timeout reached (%u seconds) - stopping priming",
+                 (unsigned) (PRIMING_DURATION_MS / 1000));
+        stop_priming();
+    }
+
     // Route to the protocol-specific loop (Vevor has its own framing/cadence)
     if (profile_.protocol == HeaterProtocol::VEVOR_UART) {
         vevor_loop();
         return;
     }
 
-        // === AMBIENT HEAT LIMIT CHECK (HEAT Mode ONLY) ===
-	if (heater_mode_ == HeaterMode::ON && current_temperature_value_ > ambient_heat_limit_) {
-            ESP_LOGW(TAG, "Ambient Limit Exceeded in HEAT mode: Room %.1f°C > Limit %.1f°C. Forcing shutdown.",
-                     current_temperature_value_, ambient_heat_limit_);
-            pending_on_off_command_ = CMD_STOP;
-            in_cooldown_ = true; // Start cooldown sequence immediately
-        }
+    // === BDAP path ===
     if (awaiting_rx_) {
         while (available()) {
             uint8_t byte = read();
@@ -579,12 +412,6 @@ void HeaterUart::standalone_loop() {
         }
 
         return;
-    }
-
-    // Check priming timeout (60 seconds)
-    if (is_priming_ && (now - priming_start_time_ >= 60000)) {
-        ESP_LOGI(TAG, "Fuel priming timeout reached (60 seconds) - stopping priming");
-        stop_priming();
     }
 
     // Time to send next frame?
@@ -762,7 +589,7 @@ void HeaterUart::parse_rx_frame(const uint8_t *frame, size_t length) {
         // Continue parsing anyway - some heaters may have CRC issues
     }
 
-    // Parse response frame (same structure as bytes 24-47 in injection mode)
+    // Parse response frame (24-byte BDAP heater status frame, 0x76 start marker)
     // Byte 0: 0x76 start marker
     // Byte 1: Protocol version
     // Byte 2: Run state
@@ -821,7 +648,7 @@ void HeaterUart::parse_rx_frame(const uint8_t *frame, size_t length) {
              in_cooldown_ ? " [COOLDOWN]" : "");
 
     // Cooldown monitoring: check if heat exchanger has cooled enough
-    if (in_cooldown_ && standalone_mode_) {
+    if (in_cooldown_) {
         if (hx_temp <= profile_.cooldown_target_temp) {
             ESP_LOGI(TAG, "Cooldown complete: HX temp %.0f°C <= %.0f°C target. Fan stopping.",
                      hx_temp, profile_.cooldown_target_temp);
@@ -914,7 +741,7 @@ bool HeaterUart::refresh_room_temperature() {
 }
 
 bool HeaterUart::is_room_sensor_stale() const {
-    if (!standalone_mode_ || external_temp_sensor_ == nullptr) return false;
+    if (external_temp_sensor_ == nullptr) return false;
     // Staleness is defined on ACCEPTED readings (refresh_room_temperature):
     // NaN and implausible samples do not refresh the timer, so a sensor that
     // is dead or stuck emitting garbage is blind after the timeout.
@@ -938,7 +765,7 @@ void HeaterUart::thermostat_control() {
     // fresh data arrives. (User requirement, 2026-10-20: DHT22 in warning
     // state > 10 min -> heater off; 2026-10-21: also don't act on glitch
     // samples.)
-    if (standalone_mode_ && external_temp_sensor_ != nullptr && is_room_sensor_stale()) {
+    if (external_temp_sensor_ != nullptr && is_room_sensor_stale()) {
         if (on_off_value_ || heater_on_request_) {
             ESP_LOGW(TAG, "Room sensor stale > %.0f min (last valid %.1fC): stopping heater",
                      ROOM_SENSOR_TIMEOUT_MS / 60000.0f, current_temperature_value_);
@@ -955,7 +782,7 @@ void HeaterUart::thermostat_control() {
 
     // === STANDBY CHECK (AUTO mode) ===
     // If in standby, check if temperature has dropped enough to start
-    if (in_standby_ && heater_mode_ == HeaterMode::AUTO && standalone_mode_) {
+    if (in_standby_ && heater_mode_ == HeaterMode::AUTO) {
         float threshold = target_temp - auto_shutdown_hysteresis_;
         if (room_temp < threshold) {
             ESP_LOGI(TAG, "Standby->Start: room %.1f°C < %.1f°C threshold", room_temp, threshold);
@@ -973,7 +800,7 @@ void HeaterUart::thermostat_control() {
     // State 4 (Ignited): Ramp pump to max to reach operating temperature quickly.
     // State 5 (Running): Normal thermostat control.
     // Note: In ON mode, we skip thermostat control but still respect safety limits.
-    if (on_off_value_ && standalone_mode_) {
+    if (on_off_value_) {
         uint32_t now = millis();
 
         if (run_state_value_ == RUN_STATE_IGNITED) {
@@ -1172,7 +999,7 @@ void HeaterUart::thermostat_control() {
     // === AUTO-RESTART LOGIC (AUTO mode only) ===
     // Check if heater should auto-restart from auto-shutdown state
     // This runs when heater is off and was auto-shutdown (not manual off)
-    if (!on_off_value_ && in_auto_shutdown_ && heater_mode_ == HeaterMode::AUTO && standalone_mode_) {
+    if (!on_off_value_ && in_auto_shutdown_ && heater_mode_ == HeaterMode::AUTO) {
         float restart_threshold = target_temp - auto_shutdown_hysteresis_;
 
         if (room_temp < restart_threshold) {
@@ -1199,13 +1026,8 @@ static float air_density_ratio(float altitude_m) {
 void HeaterUart::vevor_loop() {
     uint32_t now = millis();
 
-    // === AMBIENT HEAT LIMIT CHECK (HEAT Mode ONLY) ===
-    if (heater_mode_ == HeaterMode::ON && current_temperature_value_ > ambient_heat_limit_) {
-        ESP_LOGW(TAG, "Ambient Limit Exceeded in HEAT mode: Room %.1f°C > Limit %.1f°C. Forcing shutdown.",
-                 current_temperature_value_, ambient_heat_limit_);
-        pending_on_off_command_ = CMD_STOP;
-        in_cooldown_ = true;  // Start cooldown sequence immediately
-    }
+    // Ambient heat limit + priming timeout are checked once in
+    // standalone_loop() before the protocol dispatch - shared by both paths.
 
     // Continuously collect frames. Resync on 0xAA; ignore our own echo (id 0x66).
     while (available()) {
@@ -1251,11 +1073,8 @@ void HeaterUart::vevor_loop() {
         vevor_rx_index_ = 0;
     }
 
-    // Priming timeout (parity with BDAP; priming itself is unsupported on Vevor)
-    if (is_priming_ && (now - priming_start_time_ >= 60000)) {
-        ESP_LOGI(TAG, "Fuel priming timeout reached (60 seconds) - stopping priming");
-        stop_priming();
-    }
+    // Priming timeout is checked once in standalone_loop() before dispatch
+    // (priming itself is unsupported on Vevor - refused at start_priming()).
 
     // 1 Hz controller cadence - controller always talks first, heater answers
     if (now - last_tx_time_ >= STANDALONE_TX_INTERVAL_MS) {
@@ -1471,11 +1290,6 @@ void HeaterUart::start_priming() {
         return;
     }
 
-    if (!standalone_mode_) {
-        ESP_LOGW(TAG, "Fuel priming is only available in standalone mode");
-        return;
-    }
-
     if (profile_.protocol != HeaterProtocol::BDAP) {
         // No documented pump-prime command on the Vevor bus - refuse rather than guess
         ESP_LOGW(TAG, "Fuel priming is not supported on this heater's protocol");
@@ -1488,7 +1302,8 @@ void HeaterUart::start_priming() {
         return;
     }
 
-    ESP_LOGI(TAG, "Starting fuel priming - pump will run at %.1f Hz for 60 seconds", profile_.pump_prime_freq);
+    ESP_LOGI(TAG, "Starting fuel priming - pump will run at %.1f Hz for %u seconds",
+             profile_.pump_prime_freq, (unsigned) (PRIMING_DURATION_MS / 1000));
     is_priming_ = true;
     priming_start_time_ = millis();
 

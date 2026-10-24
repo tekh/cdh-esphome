@@ -40,6 +40,14 @@ Status markers: **OPEN** (actionable) · **PARKED** (deliberately deferred) ·
 4. **DECIDED — Fuel Prime is BDAP-only.** The Vevor layer refuses it (no documented
    prime command; that heater self-primes during every start). Not a gap.
 
+5. **DECIDED 2026-10-24 — LCD injection mode removed.** The 48-byte sniff/injection
+   path (`parse_frame`, `send_command`, `loop()` injection branch, `standalone_mode:`
+   YAML key) was deleted: it was BDAP-only, never validated against real hardware
+   (no device target, item #1), and the multi-heater refactor (ROADMAP.md, Phase 1b)
+   restructures its surroundings so it would not drop back in cleanly. Standalone is
+   now the only mode. Recovery: `git tag lcd-injection-final` (the commit just before
+   removal). Closes: nothing to close — abandoned by owner decision, not fixed.
+
 ---
 
 ## 2kW / vevor_2kw + vevor_2kw_v2 (XMZ-D2) — OPEN
