@@ -9,9 +9,11 @@
 #include "esphome/components/select/select.h"
 
 #include <map>
+#include <memory>
 #include <string>
 
 #include "heater_profile.h"
+#include "heater_protocol_driver.h"
 
 namespace esphome {
 namespace heater_uart {
@@ -25,47 +27,26 @@ enum class HeaterMode : uint8_t {
   ON = 2     // Force heater on, bypass thermostat (safety limits still apply)
 };
 
-// Command bytes for Tx Byte[2]
-static const uint8_t CMD_NO_CHANGE = 0x00;
-static const uint8_t CMD_STOP = 0x05;
-static const uint8_t CMD_START = 0xA0;
-
-// Run states (Rx Byte[2])
-static const uint8_t RUN_STATE_OFF = 0;
-static const uint8_t RUN_STATE_START_ACK = 1;
-static const uint8_t RUN_STATE_GLOW_PREHEAT = 2;
-static const uint8_t RUN_STATE_FAILED_IGNITION = 3;
-static const uint8_t RUN_STATE_IGNITED = 4;
-static const uint8_t RUN_STATE_RUNNING = 5;
-static const uint8_t RUN_STATE_STOP_ACK = 6;
-static const uint8_t RUN_STATE_POST_GLOW = 7;
-static const uint8_t RUN_STATE_COOLDOWN = 8;
-
-// Operating voltage options
+// Operating voltage options (encoded into BDAP TX byte 11)
 static const uint8_t VOLTAGE_12V = 0x78;  // 120 = 12.0V
 static const uint8_t VOLTAGE_24V = 0xF0;  // 240 = 24.0V
-
-// Default frame parameters (from Afterburner project)
-static const uint8_t DEFAULT_MIN_PUMP_FREQ = 0x0E;    // 1.4 Hz
-static const uint8_t DEFAULT_MAX_PUMP_FREQ = 0x32;    // 5.0 Hz
 
 // Pump adjustment timing - thermal mass means changes take time to show effect
 static const uint32_t PUMP_ADJUST_INTERVAL_MS = 5000;  // 5 seconds between adjustments
 
-// Altitude default (metres) - overridable via YAML
-//static const uint16_t DEFAULT_ALTITUDE = 0x0DAC;      // 3500m
-static const uint16_t DEFAULT_ALTITUDE = 0x02EE;      // 750m
-
-// Standalone mode timing
-static const uint32_t STANDALONE_TX_INTERVAL_MS = 1000;  // 1 Hz
-static const uint32_t STANDALONE_RX_TIMEOUT_MS = 200;    // Wait for response (heater responds in ~100-130ms)
-
-// Fuel priming run length (60 s pump-only). Shared by both protocol loops;
-// hoisted here 2026-10-24 when the duplicated copies were unified. Moves into
-// Tuning/YAML at Phase 3 of the refactor (ROADMAP.md).
+// Fuel priming run length (60 s pump-only). Moves into Tuning/YAML at Phase 3
+// of the refactor (ROADMAP.md).
 static const uint32_t PRIMING_DURATION_MS = 60000;
 
-class HeaterUart : public PollingComponent, public uart::UARTDevice {
+// Run-state constants and the protocol driver live in heater_protocol_driver.h
+// (included above): RUN_STATE_*, HeaterProtocolDriver, Telemetry, ControlInputs.
+
+// HeaterUart is the ESHome facade: entity registry + publishing, user/mode
+// intent, room-sensor health, priming, and the thermostat/safety policy (the
+// Phase 3 extraction moves the policy out). All protocol-specific behaviour -
+// framing, cadence, echo, checksums, encode/decode - lives behind
+// HeaterProtocolDriver (BdapDriver / VevorDriver), selected by the profile.
+class HeaterUart : public PollingComponent, public uart::UARTDevice, public ByteStream {
  public:
   HeaterUart() = default;
 
@@ -83,7 +64,6 @@ class HeaterUart : public PollingComponent, public uart::UARTDevice {
   // Configuration setters
   void set_heater_model(HeaterModel model) { this->profile_ = profile_for(model); }
   void set_operating_voltage(uint8_t voltage) { this->operating_voltage_ = voltage; }
-  void set_temperature_backoff(float offset) { this->temp_backoff_offset_ = offset; }
   void set_altitude(uint16_t altitude) { this->altitude_ = altitude; }
   void set_auto_shutdown_overshoot(float overshoot) { this->auto_shutdown_overshoot_ = overshoot; }
   void set_auto_shutdown_hysteresis(float hysteresis) { this->auto_shutdown_hysteresis_ = hysteresis; }
@@ -97,30 +77,36 @@ class HeaterUart : public PollingComponent, public uart::UARTDevice {
   void loop() override;
   void update() override;
 
+  // ByteStream (driver transport): HeaterUart IS-A UARTDevice; the driver
+  // talks to the bus through this interface.
+  int available() override;
+  int read() override;
+  void write_array(const uint8_t *data, size_t length) override;
+  void flush() override;
+
   // Command methods
   void turn_on();
   void turn_off();
   void set_desired_temperature(float temperature);
   void set_pump_frequency(float frequency);
   // Power-level dial (1-10) for profiles whose fuel command is a level, not a
-  // frequency (Vevor). Converts to the profile's Hz domain internally so the
-  // thermostat, the facade mapping and the TX boundary stay unchanged.
+  // frequency (Vevor). Converts via the shared output_domain mapping.
   void set_power_level(uint8_t level);
   // Current level for display: mirrors the user's setpoint on manual-HEAT
   // profiles, otherwise the firmware's current request.
   uint8_t get_power_level_display() const;
   // Experimental fan-speed probe (Vevor): 0 = disabled, >0 = write BE uint16
   // into undocumented TX bytes 10-11. See heater_fan_probe_number.h.
-  void set_fan_probe_rpm(uint16_t rpm) { this->fan_probe_rpm_ = rpm; }
-  uint16_t get_fan_probe_rpm() const { return fan_probe_rpm_; }
+  void set_fan_probe_rpm(uint16_t rpm);
+  uint16_t get_fan_probe_rpm() const;
 
   // State accessors
-  bool get_on_off_state() const { return on_off_value_; }
-  float get_desired_temperature() const { return desired_temperature_value_; }
-  // Room-sensor health (standalone mode): true when the external room sensor has
-  // not produced a valid (non-NaN) reading for >10 minutes. The thermostat must
-  // not burn on blind data (a stale last value hides an overheat, and a stale
-  // cold value could trigger a blind start). 2026-10-20, user requirement.
+  bool get_on_off_state() const;
+  float get_desired_temperature() const { return desired_temp_setting_; }
+  // Room-sensor health: true when the external room sensor has not produced a
+  // valid (non-NaN) reading for >10 minutes. The thermostat must not burn on
+  // blind data (a stale last value hides an overheat, and a stale cold value
+  // could trigger a blind start). 2026-10-20, user requirement.
   bool is_room_sensor_stale() const;
   // Accept a fresh external room-sensor reading only if it is valid (non-NaN)
   // AND physically plausible (within ROOM_TEMP_MAX_STEP of the last accepted
@@ -162,7 +148,7 @@ class HeaterUart : public PollingComponent, public uart::UARTDevice {
   // Temperature number reference (for state sync)
   number::Number *temperature_number_{nullptr};
 
-  // External temperature sensor (for standalone mode)
+  // External temperature sensor (room temperature in standalone mode)
   sensor::Sensor *external_temp_sensor_{nullptr};
 
   // Pump frequency number reference (for state sync)
@@ -173,7 +159,6 @@ class HeaterUart : public PollingComponent, public uart::UARTDevice {
 
   // Fan speed probe number reference (experimental, Vevor undocumented bytes)
   number::Number *fan_probe_number_{nullptr};
-  uint16_t fan_probe_rpm_ = 0;  // 0 = disabled (TX bytes 10-11 stay 0x00)
 
    // Mode select reference (for state sync)
    select::Select *mode_select_{nullptr};
@@ -181,29 +166,16 @@ class HeaterUart : public PollingComponent, public uart::UARTDevice {
    float ambient_heat_limit_ = AMBIENT_HEAT_LIMIT; // Configurable limit for HEAT mode shutdown
    HeaterMode heater_mode_ = HeaterMode::OFF;
 
-  // Pump frequency setting (Hz, for fixed Hz mode)
-  float pump_freq_setting_ = 1.6f;  // Default to low pump rate
+  // Protocol driver (owns framing, cadence, echo, checksums, decode).
+  // Selected by profile_.protocol in setup().
+  std::unique_ptr<HeaterProtocolDriver> driver_;
 
-  // User's requested pump setting (Hz). On profiles with heat_mode_manual the
-  // firmware sends THIS verbatim in HEAT/state-5 instead of modulating, and the
-  // pump number entity mirrors it (so the displayed setpoint never gets
-  // clobbered by the ignition warm-up ramp).
-  float pump_freq_user_request_ = 1.6f;
-
-  // --- Standalone mode (the ONLY mode since the LCD injection path was
-  // removed 2026-10-24; recover the old sniff/inject code from the git tag
-  // `lcd-injection-final`) ---
+  // --- Controller state (mode/intent; the driver holds wire-level intent) ---
   uint8_t operating_voltage_ = VOLTAGE_12V;
   uint16_t altitude_ = 750;              // Altitude in metres (affects combustion)
-  float desired_temp_setting_ = 19.0f;  // Our desired temperature (for standalone). 2026-10-20: default 22.0 -> 19.0 (post-reboot state; mode default is already OFF)
-  float temp_backoff_offset_ = 0.5f;     // Start ramping down this many °C before target
-  bool heater_on_request_ = false;       // Whether we want heater on
-  uint8_t pending_on_off_command_ = CMD_NO_CHANGE;  // Pending on/off command
-  uint32_t last_tx_time_ = 0;            // Last frame transmission time
-  bool awaiting_rx_ = false;             // Waiting for heater response
-  uint32_t rx_timeout_ = 0;              // RX timeout timestamp
-  uint8_t rx_frame_[24];                 // Buffer for RX-only frame in standalone
-  int rx_frame_index_ = 0;               // Index for RX frame
+  float desired_temp_setting_ = 19.0f;   // Desired temperature. 2026-10-20: default 22.0 -> 19.0 (post-reboot state; mode default is already OFF)
+  float pump_freq_setting_ = 1.6f;       // Fuel request in the profile's Hz domain (normalized at the TX boundary)
+  float pump_freq_user_request_ = 1.6f;  // User's requested setting (Hz). On profiles with heat_mode_manual the firmware sends THIS verbatim in HEAT/state-5 instead of modulating, and the pump number entity mirrors it (so the displayed setpoint never gets clobbered by the ignition warm-up ramp).
   bool in_cooldown_ = false;             // Cooldown mode active (fan running to cool HX)
   uint32_t last_pump_adjust_time_ = 0;   // Last time pump frequency was adjusted
 
@@ -218,24 +190,9 @@ class HeaterUart : public PollingComponent, public uart::UARTDevice {
   bool is_priming_ = false;                // Fuel priming active
   uint32_t priming_start_time_ = 0;        // Time when priming started (millis)
 
-  // Parsed data
+  // Room temperature (external sensor, physics-guarded; see
+  // refresh_room_temperature())
   float current_temperature_value_ = 0;
-  int fan_speed_value_ = 0;
-  float supply_voltage_value_ = 0;
-  float heat_exchanger_temp_value_ = 0;
-  float glow_plug_voltage_value_ = 0;
-  float glow_plug_current_value_ = 0;
-  // Vevor glow cluster bytes 24-26: glow-phase activity, quantity unidentified.
-  // Kept raw (no scaling, no unit) until something independent pins them.
-  float glow_a_value_ = 0;
-  float glow_b_value_ = 0;
-  float glow_c_value_ = 0;
-  float pump_frequency_value_ = 0;
-  float fan_voltage_value_ = 0;
-  // Level the ECM reports it is running at (Vevor RX byte 6). Feedback for the
-  // HEAT start-at-max/ramp-down behaviour; the Power Level dial is the request.
-  int power_level_actual_value_ = 0;
-  float desired_temperature_value_ = 0.0f;  // 2026-10-20: int -> float so 0.5C setpoints (e.g. 19.5) aren't truncated in the number/sensor display; the thermostat logic already used the float desired_temp_setting_
   uint32_t last_valid_room_temp_time_ = 0;  // millis() of the last ACCEPTED room-sensor reading; 0 = none yet (treated as stale after 10 min)
   static const uint32_t ROOM_SENSOR_TIMEOUT_MS = 10 * 60 * 1000;  // 10 min without an accepted room reading = sensor fault
   static constexpr float ROOM_TEMP_MAX_STEP = 0.5f;  // max plausible room-temp change per 10s sensor interval (observed field rate ~0.3C/min); larger jumps are DHT22 glitch samples
@@ -246,39 +203,28 @@ class HeaterUart : public PollingComponent, public uart::UARTDevice {
   float room_temp_boot_sample_[ROOM_TEMP_BOOT_SAMPLES] = {0.0f, 0.0f, 0.0f};
   uint8_t room_temp_boot_sample_count_ = 0;
   uint32_t room_temp_boot_last_sample_time_ = 0;
-  int error_code_value_ = 0;
-  int run_state_value_ = 0;
-  bool on_off_value_ = false;
 
+  // Last parsed telemetry mirror for publishing (copied on each fresh frame)
+  int fan_speed_value_ = 0;
+  float supply_voltage_value_ = 0;
+  float heat_exchanger_temp_value_ = 0;
+  float glow_plug_voltage_value_ = 0;
+  float glow_plug_current_value_ = 0;
+  float glow_a_value_ = 0;
+  float glow_b_value_ = 0;
+  float glow_c_value_ = 0;
+  float pump_frequency_value_ = 0;
+  float fan_voltage_value_ = 0;
+  int power_level_actual_value_ = 0;
+  int error_code_value_ = 0;
+  bool on_off_value_ = false;
   std::string run_state_description_ = "Unknown";
   std::string error_code_description_ = "Unknown";
 
-  void parse_rx_frame(const uint8_t *frame, size_t length);
-  uint16_t calc_crc16(const uint8_t *data, size_t length);
-
-  // Standalone mode methods
-  void standalone_loop();
-  void build_tx_frame(uint8_t *frame, uint8_t command);
-  void send_standalone_frame();
-
-  // Shared thermostat/safety logic (BDAP and Vevor both call this after parsing)
+  // Driver plumbing: called when loop() received at least one fresh frame.
+  void on_fresh_frame();
+  // Shared thermostat/safety logic (both protocols call this after parsing)
   void thermostat_control();
-
-  // Vevor protocol methods (used when profile_.protocol == VEVOR_UART)
-  void vevor_loop();
-  void send_vevor_frame();
-  void parse_vevor_rx_frame(const uint8_t *frame, size_t length);
-  uint8_t calc_checksum(const uint8_t *data, size_t length);
-
-  // Vevor RX state (frame up to 60 bytes: length field + 5; e.g. 0x34 -> 57)
-  uint8_t vevor_rx_[64];
-  int vevor_rx_index_ = 0;
-  uint32_t vevor_rx_last_byte_ = 0;
-
-  // Mappings for error and run states
-  static const std::map<int, std::string> run_state_map;
-  static const std::map<int, std::string> error_code_map;
-  static const std::map<int, std::string> vevor_error_map;
 };
 
 }  // namespace heater_uart

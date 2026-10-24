@@ -63,14 +63,17 @@ check and priming timeout unified into `standalone_loop()` before the protocol
 dispatch (`PRIMING_DURATION_MS` named constant).
 Verification: tests green ✔, owner ESPHome compile ☐, bench flash ☐.
 
-### Phase 2 — ProtocolDriver extraction ☐
-Extract `BdapDriver` / `VevorDriver` behind one interface: `begin()`,
-`loop()`, `start()`, `stop()`, `set_output(float)`, `set_priming(bool)`,
-telemetry struct, error/run-state maps. `HeaterUart` keeps a driver reference
-chosen by `profile_.protocol` and loses all `if (protocol == …)` branches.
-Drivers own framing, echo discard, resync, checksums — exactly the constants
-that stay compiled (§ "anti-goal" in the analysis). Each driver's
-encode/decode gets direct host tests (feed recorded frames, compare fields).
+### Phase 2 — ProtocolDriver extraction ● (code done 2026-10-24; bench flash pending)
+`BdapDriver` / `VevorDriver` behind one interface (`heater_protocol_driver.h`):
+`begin()`, `loop()`, `request_start()/request_stop()/pulse_stop()`,
+`on_requested()`, `set_output` via ControlInputs (normalized 0..1), telemetry
+struct, error/run-state maps. `HeaterUart` is now a thin facade (entity
+registry, publishing, mode intent, room-sensor guard, priming) + the
+thermostat policy (Phase 3 moves it out). Drivers own framing, echo discard,
+resync, checksums. Host tests: fake ByteStream, frame-layout goldens, TX state
+machines, decode rules (37 tests / 382 checks).
+Verification: tests green ✔, stub syntax check of facade+entities ✔, owner
+ESPHome compile ☐, bench flash ☐.
 
 ### Phase 3 — SafetyPolicy / ControlPolicy extraction ☐
 - `SafetyPolicy`: HX floor/too-hot/critical, ambient limit, cooldown gate.

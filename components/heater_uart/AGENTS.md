@@ -2,24 +2,49 @@
 
 ESPHome component for diesel heater UART communication.
 
+## ARCHITECTURE (ROADMAP.md Phase 2)
+
+```
+HeaterUart (facade: entities, intent, thermostat/safety policy, room sensor)
+     │  ByteStream (transport interface)
+     ▼
+HeaterProtocolDriver ── BdapDriver (0x76/0x16 @ 25000) | VevorDriver (0xAA/0x66 @ 4800)
+```
+
+The facade works in a normalized domain (fuel fraction 0.0-1.0, shared run-state
+enumeration, Telemetry struct); each driver owns its protocol's framing, cadence,
+echo handling, checksums and byte encode/decode. Adding a heater that speaks an
+EXISTING protocol = profile only; a NEW protocol = one new driver.
+
 ## FILE ROLES
 
 | File | Purpose |
 |------|---------|
-| `heater_uart.cpp/h` | Core: frame parsing, thermostat, UART handling |
+| `heater_uart.cpp/h` | Facade: entity registry/publishing, mode intent, thermostat + safety policy, room-sensor guard, priming |
+| `heater_protocol_driver.h` | Driver seam: ByteStream, Telemetry, ControlInputs, interface, shared run-state names |
+| `bdap_driver.cpp/h` | BDAP framing/cadence/echo/parse (+ fan matching, moves to SafetyPolicy at Phase 3) |
+| `vevor_driver.cpp/h` | Vevor framing, TX state machine, level encoding + altitude derate, RX decode, error map, fan probe |
+| `heater_profile.h` | Per-model tuning presets + capability flags |
+| `heater_output.h` | The one fuel-domain conversion (normalized ↔ Hz ↔ level), host-tested |
+| `heater_log.h` | Log shim: ESP_LOG* on device, no-ops on host |
 | `__init__.py` | ESPHome schema, config validation |
-| `sensor.py` | 9 numeric sensors (temp, voltage, current) |
+| `sensor.py` | Numeric sensors (temp, voltage, current, glow cluster) |
 | `text_sensor.py` | `run_state`, `error_code` human-readable |
 | `binary_sensor.py` | `on_off_state`, `auto_shutdown_active`, `standby_active`, `priming_active` |
-| `number.py` | Temperature + pump frequency controls |
+| `number.py` | Temperature + pump frequency + power level + fan probe controls |
 | `select.py` | Mode: Off/Auto/Heat |
 | `button.py` | Fuel priming button |
 | `heater_*.cpp/h` | C++ implementations for number/select entities |
 
+Host tests: `tests/` (`make -C tests`, plain g++) pin frame layouts, the TX
+state machines, decode rules and profile invariants - run before committing.
+
 ## ADDING ENTITIES
 
 1. **Python**: Add schema in `*.py`, call `parent.set_X(key, entity)`
-2. **C++**: Add member + setter in `heater_uart.h`, parse in `parse_rx_frame()` (BDAP) or `parse_vevor_rx_frame()` (Vevor), publish in `update()`
+2. **C++**: Add member + setter in `heater_uart.h`, extend `Telemetry` if a new
+   parsed value is needed, decode in the owning driver's `parse_frame()`,
+   publish in the facade's `update()`
 
 ## FRAME LAYOUT (standalone mode, the only mode since the LCD injection path was removed 2026-10-24)
 
@@ -30,7 +55,8 @@ Vevor  TX 16B:  0xAA 0x66 | cmd | 0x0B | ... | power 1-10 | state | ... | additi
 Vevor  RX 56/57B: 0xAA 0x77 | ... | level | HX (int16 x0.1C) | pump | fan | ... | csum
 ```
 
-Key byte positions defined in `heater_uart.cpp:parse_rx_frame()` / `parse_vevor_rx_frame()`.
+Key byte positions defined in the owning driver's `parse_frame()`
+(`bdap_driver.cpp` / `vevor_driver.cpp`) and pinned by `tests/`.
 
 ## THERMOSTAT (standalone_loop)
 
