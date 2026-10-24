@@ -86,14 +86,7 @@ void HeaterUart::loop() {
 
     // Push the controller state to the driver, then give it the bus for this
     // tick (TX cadence + RX collection/parsing are the driver's business).
-    Thermostat::Params params;
-    params.approach_threshold = approach_threshold_;
-    params.auto_shutdown_overshoot = auto_shutdown_overshoot_;
-    params.auto_shutdown_hysteresis = auto_shutdown_hysteresis_;
-    params.heat_mode_manual = profile_.heat_mode_manual;
-    params.oversight_enabled = safety_.oversight();
-    params.external_sensor_present = external_temp_sensor_ != nullptr;
-    params.sensor_stale = room_sensor_.stale(now);
+    const Thermostat::Params params = build_params();
 
     ControlInputs inputs;
     inputs.output_fraction = output_domain::normalized_from_hz(thermostat_.pump_request(), profile_);
@@ -336,68 +329,17 @@ void HeaterUart::set_heater_mode(HeaterMode mode) {
                            (mode == HeaterMode::AUTO) ? "Auto" : "On";
     ESP_LOGI(TAG, "Heater mode set to: %s", mode_str);
 
-    if (mode == HeaterMode::OFF) {
-        // Force off - stop heater if running
-        if (driver_->telemetry().on || driver_->on_requested()) {
-            ESP_LOGI(TAG, "Mode Off: stopping heater");
-            driver_->request_stop();
-            safety_.begin_cooldown();
-        }
-        thermostat_.set_standby(false);
-        thermostat_.set_auto_shutdown(false);
+    // Entry decisions (start-vs-standby, stop-if-running, start level) live in
+    // the thermostat state machine - sharing the standby threshold with the
+    // periodic control so the two can never drift (Phase 3b).
+    const bool running_intent = driver_->telemetry().on || driver_->on_requested();
+    const Thermostat::Result r = thermostat_.enter_mode(
+        mode, room_sensor_.value(), desired_temp_setting_, running_intent,
+        build_params(), millis());
 
-    } else if (mode == HeaterMode::AUTO) {
-        // Check if we should start or enter standby
-        float room_temp = room_sensor_.value();
-        float threshold = desired_temp_setting_ - auto_shutdown_hysteresis_;
-
-        if (is_room_sensor_stale()) {
-            // No blind starts: the room temperature is stale (sensor dead or
-            // never read). Park in standby; the thermostat's standby check
-            // starts the heater once fresh readings arrive. If the heater is
-            // running, stop it (burning on blind data).
-            ESP_LOGW(TAG, "Mode Auto: room sensor stale - no blind start, parking in standby");
-            thermostat_.set_standby(true);
-            if (driver_->telemetry().on || driver_->on_requested()) {
-                driver_->request_stop();
-                safety_.begin_cooldown();
-            }
-        } else if (room_temp < threshold) {
-            // Cold enough - start heater
-            ESP_LOGI(TAG, "Mode Auto: room %.1f°C < %.1f°C threshold, starting heater",
-                     room_temp, threshold);
-            driver_->request_start();
-            thermostat_.seat_request(profile_.pump_freq_initial);
-            thermostat_.reset_adjust_timer(millis());
-            thermostat_.set_standby(false);
-        } else {
-            // Too warm - enter standby, wait for temp drop
-            ESP_LOGI(TAG, "Mode Auto: room %.1f°C >= %.1f°C threshold, entering standby",
-                     room_temp, threshold);
-            thermostat_.set_standby(true);
-            // If heater is running, stop it
-            if (driver_->telemetry().on || driver_->on_requested()) {
-                driver_->request_stop();
-                safety_.begin_cooldown();
-            }
-        }
-        thermostat_.set_auto_shutdown(false);
-
-    } else if (mode == HeaterMode::ON) {
-        // Force on - start heater regardless of temperature
-        ESP_LOGI(TAG, "Mode On: forcing heater start");
-        driver_->request_start();
-        // Start level on a cold start. Manual-HEAT profiles start at FULL POWER and
-        // ramp down as the room approaches the requested temperature
-        // (thermostat control); everything else keeps the ignition-rate default.
-        thermostat_.seat_request(profile_.heat_mode_manual ? profile_.pump_freq_max
-                                                           : profile_.pump_freq_initial);
-        ESP_LOGI(TAG, "Mode On: start level %.1f Hz (%.1f = full power)", thermostat_.pump_request(),
-                 profile_.pump_freq_max);
-        thermostat_.reset_adjust_timer(millis());
-        thermostat_.set_standby(false);
-        thermostat_.set_auto_shutdown(false);
-    }
+    if (r.request_stop) driver_->request_stop();
+    if (r.request_start) driver_->request_start();
+    if (r.enter_cooldown) safety_.begin_cooldown();
 }
 
 // ==================== ROOM SENSOR (facade wrapper) ====================
@@ -410,6 +352,19 @@ bool HeaterUart::refresh_room_temperature() {
 bool HeaterUart::is_room_sensor_stale() const {
     if (external_temp_sensor_ == nullptr) return false;
     return room_sensor_.stale(millis());
+}
+
+// Build the per-tick policy parameters from facade configuration + the guard.
+Thermostat::Params HeaterUart::build_params() const {
+    Thermostat::Params params;
+    params.approach_threshold = approach_threshold_;
+    params.auto_shutdown_overshoot = auto_shutdown_overshoot_;
+    params.auto_shutdown_hysteresis = auto_shutdown_hysteresis_;
+    params.heat_mode_manual = profile_.heat_mode_manual;
+    params.oversight_enabled = safety_.oversight();
+    params.external_sensor_present = external_temp_sensor_ != nullptr;
+    params.sensor_stale = params.external_sensor_present && room_sensor_.stale(millis());
+    return params;
 }
 
 // ==================== FUEL PRIMING ====================

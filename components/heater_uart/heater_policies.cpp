@@ -13,6 +13,77 @@ namespace heater_uart {
 
 // ==================== Thermostat ====================
 
+Thermostat::Result Thermostat::enter_mode(HeaterMode mode, float room_temp, float target_temp,
+                                          bool running_intent, const Params &params,
+                                          uint32_t now) {
+    Result out;
+    const HeaterProfile &profile = *profile_;
+
+    if (mode == HeaterMode::OFF) {
+        // Force off - stop heater if running
+        if (running_intent) {
+            HEATER_LOGI(TAG, "Mode Off: stopping heater");
+            out.request_stop = true;
+            out.enter_cooldown = true;
+        }
+        in_standby_ = false;
+        in_auto_shutdown_ = false;
+
+    } else if (mode == HeaterMode::AUTO) {
+        const float threshold = standby_threshold(target_temp, params);
+
+        if (params.external_sensor_present && params.sensor_stale) {
+            // No blind starts: the room temperature is stale (sensor dead or
+            // never read). Park in standby; the thermostat's standby check
+            // starts the heater once fresh readings arrive. If the heater is
+            // running, stop it (burning on blind data).
+            HEATER_LOGW(TAG, "Mode Auto: room sensor stale - no blind start, parking in standby");
+            in_standby_ = true;
+            if (running_intent) {
+                out.request_stop = true;
+                out.enter_cooldown = true;
+            }
+        } else if (room_temp < threshold) {
+            // Cold enough - start heater
+            HEATER_LOGI(TAG, "Mode Auto: room %.1f°C < %.1f°C threshold, starting heater",
+                        room_temp, threshold);
+            out.request_start = true;
+            pump_freq_setting_ = profile.pump_freq_initial;
+            last_pump_adjust_time_ = now;
+            in_standby_ = false;
+        } else {
+            // Too warm - enter standby, wait for temp drop
+            HEATER_LOGI(TAG, "Mode Auto: room %.1f°C >= %.1f°C threshold, entering standby",
+                        room_temp, threshold);
+            in_standby_ = true;
+            // If heater is running, stop it
+            if (running_intent) {
+                out.request_stop = true;
+                out.enter_cooldown = true;
+            }
+        }
+        in_auto_shutdown_ = false;
+
+    } else if (mode == HeaterMode::ON) {
+        // Force on - start heater regardless of temperature
+        HEATER_LOGI(TAG, "Mode On: forcing heater start");
+        out.request_start = true;
+        // Start level on a cold start. Manual-HEAT profiles start at FULL POWER and
+        // ramp down as the room approaches the requested temperature
+        // (control()); everything else keeps the ignition-rate default.
+        pump_freq_setting_ = params.heat_mode_manual ? profile.pump_freq_max
+                                                     : profile.pump_freq_initial;
+        HEATER_LOGI(TAG, "Mode On: start level %.1f Hz (%.1f = full power)", pump_freq_setting_,
+                    profile.pump_freq_max);
+        last_pump_adjust_time_ = now;
+        in_standby_ = false;
+        in_auto_shutdown_ = false;
+    }
+
+    out.pump_request_hz = pump_freq_setting_;
+    return out;
+}
+
 Thermostat::Result Thermostat::control(const Telemetry &tlm, float room_temp, float target_temp,
                                        HeaterMode mode, const Params &params, uint32_t now) {
     Result out;
@@ -48,7 +119,7 @@ Thermostat::Result Thermostat::control(const Telemetry &tlm, float room_temp, fl
     // === STANDBY CHECK (AUTO mode) ===
     // If in standby, check if temperature has dropped enough to start
     if (in_standby_ && mode == HeaterMode::AUTO) {
-        float threshold = target_temp - params.auto_shutdown_hysteresis;
+        float threshold = standby_threshold(target_temp, params);
         if (room_temp < threshold) {
             HEATER_LOGI(TAG, "Standby->Start: room %.1f°C < %.1f°C threshold", room_temp, threshold);
             out.request_start = true;
@@ -279,7 +350,7 @@ Thermostat::Result Thermostat::control(const Telemetry &tlm, float room_temp, fl
     // Check if heater should auto-restart from auto-shutdown state
     // This runs when heater is off and was auto-shutdown (not manual off)
     if (!tlm.on && in_auto_shutdown_ && mode == HeaterMode::AUTO) {
-        float restart_threshold = target_temp - params.auto_shutdown_hysteresis;
+        float restart_threshold = standby_threshold(target_temp, params);
 
         if (room_temp < restart_threshold) {
             HEATER_LOGI(TAG, "Auto-restart: room %.1f°C < target %.1f°C - %.1f°C hysteresis",

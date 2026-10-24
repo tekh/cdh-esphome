@@ -66,6 +66,15 @@ class Thermostat {
 
   void begin(const HeaterProfile &profile) { profile_ = &profile; }
 
+  // Mode entry (the former HeaterUart::set_heater_mode decision body, minus
+  // logging/driver application). Shares the standby threshold computation
+  // with control() so the two can never drift apart. The facade applies the
+  // returned Result to the driver and sets heater_mode_ itself.
+  // `running_intent` = telemetry.on || driver's start intent (v1's
+  // `on_off_value_ || heater_on_request_`).
+  Result enter_mode(HeaterMode mode, float room_temp, float target_temp, bool running_intent,
+                    const Params &params, uint32_t now);
+
   // Periodic control tick - the former HeaterUart::thermostat_control(),
   // lifted verbatim with the hardcoded cadence/aggressiveness constants
   // hoisted to named constants. `sensor_stale` implements the room-sensor
@@ -93,6 +102,12 @@ class Thermostat {
   void set_auto_shutdown(bool s) { in_auto_shutdown_ = s; }
 
  protected:
+  // The single re-engage threshold (standby->start and auto-restart both
+  // compare against it - v1 used the same formula in three places).
+  static float standby_threshold(float target_temp, const Params &params) {
+    return target_temp - params.auto_shutdown_hysteresis;
+  }
+
   static const uint32_t PUMP_ADJUST_INTERVAL_MS = 5000;  // thermal mass: 5 s between adjustments
   // Thermostat aggressiveness (hardcoded in 7 subtly-diverging copies in the
   // old thermostat_control; hoisted here as named policy constants - Phase 4

@@ -289,6 +289,85 @@ TEST(heat_manual_keeps_descending_above_request) {
   CHECK(r.request_stop == false);  // HEAT never stops on overshoot
 }
 
+// --- Thermostat: mode entry (Phase 3b - shares threshold with control) ---
+
+TEST(enter_auto_cold_starts_at_ignition_rate) {
+  const HeaterProfile p = jeabong_profile();
+  Thermostat t;
+  t.begin(p);
+  const auto r = t.enter_mode(HeaterMode::AUTO, 15.0f, 19.0f, false,
+                              params_for(p), 1000);
+  CHECK(r.request_start == true);
+  CHECK_NEAR(r.pump_request_hz, 1.8f, 1e-4);  // seated at pump_freq_initial
+  CHECK(t.in_standby() == false);
+}
+
+TEST(enter_auto_warm_parks_in_standby_and_stops_if_running) {
+  const HeaterProfile p = jeabong_profile();
+  Thermostat t;
+  t.begin(p);
+  // room 20 >= threshold 18 -> standby; heater running -> stop
+  const auto r = t.enter_mode(HeaterMode::AUTO, 20.0f, 19.0f, true,
+                              params_for(p), 1000);
+  CHECK(r.request_stop == true);
+  CHECK(r.enter_cooldown == true);
+  CHECK(t.in_standby() == true);
+}
+
+TEST(enter_auto_stale_no_blind_start) {
+  const HeaterProfile p = jeabong_profile();
+  Thermostat t;
+  t.begin(p);
+  auto params = params_for(p);
+  params.external_sensor_present = true;
+  params.sensor_stale = true;
+  const auto r = t.enter_mode(HeaterMode::AUTO, 15.0f, 19.0f, true, params, 1000);
+  // stale: park in standby (even though cold enough), stop the running heater
+  CHECK(r.request_start == false);
+  CHECK(r.request_stop == true);
+  CHECK(t.in_standby() == true);
+}
+
+TEST(enter_on_seats_full_power_only_for_manual_profiles) {
+  // manual profile (v2): ON seats FULL power
+  const HeaterProfile p2 = vevor_v2_profile();
+  Thermostat t2;
+  t2.begin(p2);
+  const auto r2 = t2.enter_mode(HeaterMode::ON, 20.0f, 19.0f, false,
+                                params_for(p2), 1000);
+  CHECK(r2.request_start == true);
+  CHECK_NEAR(r2.pump_request_hz, 2.5f, 1e-4);  // v2 max
+
+  // modulating profile (8kW): ON seats the ignition rate
+  const HeaterProfile p1 = jeabong_profile();
+  Thermostat t1;
+  t1.begin(p1);
+  const auto r1 = t1.enter_mode(HeaterMode::ON, 20.0f, 19.0f, false,
+                                params_for(p1), 1000);
+  CHECK(r1.request_start == true);
+  CHECK_NEAR(r1.pump_request_hz, 1.8f, 1e-4);  // 8kW initial
+}
+
+TEST(enter_off_stops_only_when_running) {
+  const HeaterProfile p = jeabong_profile();
+  Thermostat t;
+  t.begin(p);
+  const auto r = t.enter_mode(HeaterMode::OFF, 18.0f, 19.0f, true,
+                              params_for(p), 1000);
+  CHECK(r.request_stop == true);
+  CHECK(r.enter_cooldown == true);
+  CHECK(t.in_standby() == false);
+  CHECK(t.in_auto_shutdown() == false);
+
+  // not running: no commands at all
+  Thermostat t2;
+  t2.begin(p);
+  const auto r2 = t2.enter_mode(HeaterMode::OFF, 18.0f, 19.0f, false,
+                                params_for(p), 1000);
+  CHECK(r2.request_stop == false);
+  CHECK(r2.enter_cooldown == false);
+}
+
 // --- CombustionSafety: HX overrides (via Thermostat) ---
 
 TEST(hx_soot_floor_forces_increase_on_reduce) {

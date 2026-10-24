@@ -203,6 +203,8 @@ class HeaterUart : public PollingComponent, public uart::UARTDevice, public Byte
 
   // Driver plumbing: called when loop() received at least one fresh frame.
   void on_fresh_frame(const Thermostat::Params &params);
+  // Per-tick policy parameters from facade configuration + the sensor guard.
+  Thermostat::Params build_params() const;
 };
 
 }  // namespace heater_uart
