@@ -13,6 +13,8 @@
     "bdap_driver.cpp",
     "vevor_driver.h",
     "vevor_driver.cpp",
+    "heater_policies.h",
+    "heater_policies.cpp",
     "__init__.py"
   ]
 }

@@ -24,6 +24,7 @@ EXISTING protocol = profile only; a NEW protocol = one new driver.
 | `heater_protocol_driver.h` | Driver seam: ByteStream, Telemetry, ControlInputs, interface, shared run-state names |
 | `bdap_driver.cpp/h` | BDAP framing/cadence/echo/parse (+ fan matching, moves to SafetyPolicy at Phase 3) |
 | `vevor_driver.cpp/h` | Vevor framing, TX state machine, level encoding + altitude derate, RX decode, error map, fan probe |
+| `heater_policies.h/.cpp` | Controller policies: Thermostat (AUTO/HEAT state machine), CombustionSafety (HX overrides, BDAP fan, cooldown monitor), RoomSensorGuard (DHT22 physics guard) |
 | `heater_profile.h` | Per-model tuning presets + capability flags |
 | `heater_output.h` | The one fuel-domain conversion (normalized ↔ Hz ↔ level), host-tested |
 | `heater_log.h` | Log shim: ESP_LOG* on device, no-ops on host |

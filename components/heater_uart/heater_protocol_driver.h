@@ -70,9 +70,10 @@ struct Telemetry {
 // encode it into their frames at their own cadence.
 struct ControlInputs {
   float output_fraction = 0.0f;  // fuel request, normalized 0..1 (output_domain)
+  uint16_t fan_rpm = 0;          // fan target, pre-computed by CombustionSafety (facade);
+                                 // encoded by BDAP-class frames, ignored by level-only buses
   float desired_temp = 19.0f;    // °C setpoint (BDAP TX byte 4)
   float room_temp = 0.0f;        // last accepted room reading (BDAP TX byte 3)
-  bool cooldown_active = false;  // cooldown purge requested (BDAP fan logic)
   bool priming_active = false;   // fuel priming (BDAP prime bytes)
 };
 

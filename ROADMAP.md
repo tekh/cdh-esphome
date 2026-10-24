@@ -75,20 +75,22 @@ machines, decode rules (37 tests / 382 checks).
 Verification: tests green ✔, stub syntax check of facade+entities ✔, owner
 ESPHome compile ☐, bench flash ☐.
 
-### Phase 3 — SafetyPolicy / ControlPolicy extraction ☐
-- `SafetyPolicy`: HX floor/too-hot/critical, ambient limit, cooldown gate.
-  Active on every profile by default; YAML `firmware_safety_oversight: false`
-  accepted **only** when `profile_.ecm_owned_safety` is true (cv-enforced).
-- `ControlPolicy`: the whole thermostat state machine lifted out of
-  `HeaterUart`, pure C++ (inputs: telemetry + room temp + mode + tuning;
-  output: normalized fuel fraction + on/off requests). This is where the
-  hardcoded §3.3 tuneables (aggressiveness multipliers, adjust interval,
-  priming duration, DHT22-guard constants) move into `Tuning` — as *compiled
-  presets first*, YAML exposure is Phase 4.
-- Room-sensor health guard (glitch/boot-consensus/staleness) becomes its own
-  small pure class with direct tests.
-Verification: heavy host tests (thermostat phases, manual-HEAT ramp,
-auto-shutdown/restart, safety overrides, sensor guards) + bench flash.
+### Phase 3 — SafetyPolicy / ControlPolicy extraction ◐ (heater_policies landed; bench flash pending)
+- `heater_policies.h/.cpp` (pure C++, host-tested):
+  - `Thermostat`: the whole `set_heater_mode()`-time and periodic machine —
+    standby check, state-4 warm-up ramp, AUTO three-phase, HEAT modulating,
+    manual-HEAT ramp-down, auto-shutdown/standby/restart — moved verbatim;
+    the 7 subtly-diverging aggressiveness copies are now one set of named
+    constants.
+  - `CombustionSafety`: ambient HEAT-limit, BDAP fan matching (moved out of
+    the driver — the driver now only encodes `ControlInputs.fan_rpm`),
+    cooldown completion monitor.
+  - `RoomSensorGuard`: NaN rejection, glitch-step rejection, boot 3-sample
+    consensus, staleness — pure and directly tested.
+- `standalone_mode:` guard removal fallout (Phase 1b) is complete.
+Recovery/decisions recorded in ISSUES.md.
+Remaining for this phase: owner ESPHome compile + bench flash (behavior
+must be identical), then Phase 4 opens the loop knobs to YAML.
 
 ### Phase 4 — Tuning → YAML overrides (Option A) ☐
 Every `Tuning` key becomes an optional YAML override on top of the selected

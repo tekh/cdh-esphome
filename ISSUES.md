@@ -48,6 +48,19 @@ Status markers: **OPEN** (actionable) · **PARKED** (deliberately deferred) ·
    now the only mode. Recovery: `git tag lcd-injection-final` (the commit just before
    removal). Closes: nothing to close — abandoned by owner decision, not fixed.
 
+6. **DECIDED 2026-10-24 — Combustion oversight is owner-selectable per device.**
+   `heater_profile.h` now carries `ecm_owned_safety` (Vevor-class: true — the ECM
+   self-primes, self-derates and reports E-codes; Jeabong/8kW: false — the
+   firmware is the low-combustion-temperature authority). A new
+   `firmware_safety_oversight:` YAML key (default **true**) removes the
+   firmware's pump-modulation safety stack (HX soot floor / too-hot / critical
+   stop) on request — but ONLY on `ecm_owned_safety` heaters; on firmware-safety
+   hardware the flag is ignored with a warning. The room-sensor staleness gate
+   and the ambient HEAT-mode limit are NOT part of the removable stack (owner
+   requirements, 2026-10-20) and stay on everywhere. Implementation: Phase 3 of
+   ROADMAP.md — `HeaterUart::thermostat_control()` is now the `Thermostat` class
+   (pure, host-tested in `tests/`).
+
 ---
 
 ## 2kW / vevor_2kw + vevor_2kw_v2 (XMZ-D2) — OPEN

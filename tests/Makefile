@@ -11,9 +11,11 @@ INCLUDES := -I../components/heater_uart
 
 TEST_SRCS := $(wildcard test_*.cpp)
 TEST_OBJS := $(TEST_SRCS:.cpp=.o)
-# driver translation units under test (pure C++, host-buildable)
-DRIVER_SRCS := ../components/heater_uart/bdap_driver.cpp ../components/heater_uart/vevor_driver.cpp
-DRIVER_OBJS := bdap_driver.o vevor_driver.o
+# pure-C++ component translation units under test (host-buildable)
+DRIVER_SRCS := ../components/heater_uart/bdap_driver.cpp \
+               ../components/heater_uart/vevor_driver.cpp \
+               ../components/heater_uart/heater_policies.cpp
+DRIVER_OBJS := bdap_driver.o vevor_driver.o heater_policies.o
 
 .PHONY: all test clean
 
@@ -26,18 +28,29 @@ test: $(TEST_OBJS) $(DRIVER_OBJS)
 %.o: %.cpp tiny_test.h
 	$(CXX) $(CXXFLAGS) $(INCLUDES) -c $< -o $@
 
-bdap_driver.o: ../components/heater_uart/bdap_driver.cpp ../components/heater_uart/bdap_driver.h \
+# explicit driver/policy rules (headers, not tiny_test.h, trigger rebuilds)
+bdap_driver.o: ../components/heater_uart/bdap_driver.cpp \
+               ../components/heater_uart/bdap_driver.h \
                ../components/heater_uart/heater_protocol_driver.h \
                ../components/heater_uart/heater_profile.h \
                ../components/heater_uart/heater_output.h \
                ../components/heater_uart/heater_log.h
 	$(CXX) $(CXXFLAGS) $(INCLUDES) -c $< -o $@
 
-vevor_driver.o: ../components/heater_uart/vevor_driver.cpp ../components/heater_uart/vevor_driver.h \
+vevor_driver.o: ../components/heater_uart/vevor_driver.cpp \
+                ../components/heater_uart/vevor_driver.h \
                 ../components/heater_uart/heater_protocol_driver.h \
                 ../components/heater_uart/heater_profile.h \
                 ../components/heater_uart/heater_output.h \
                 ../components/heater_uart/heater_log.h
+	$(CXX) $(CXXFLAGS) $(INCLUDES) -c $< -o $@
+
+heater_policies.o: ../components/heater_uart/heater_policies.cpp \
+                   ../components/heater_uart/heater_policies.h \
+                   ../components/heater_uart/heater_protocol_driver.h \
+                   ../components/heater_uart/heater_profile.h \
+                   ../components/heater_uart/heater_output.h \
+                   ../components/heater_uart/heater_log.h
 	$(CXX) $(CXXFLAGS) $(INCLUDES) -c $< -o $@
 
 clean:

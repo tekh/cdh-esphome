@@ -67,6 +67,13 @@ struct HeaterProfile {
   // tuning. AUTO mode is unaffected either way.
   bool heat_mode_manual;
 
+  // True when the heater's ECM owns combustion safety (self-primes, reports
+  // E-codes, protects its own HX - Vevor-class). Only on such profiles can
+  // the owner disable the firmware's combustion oversight in YAML
+  // (`firmware_safety_oversight: false`). On firmware-safety hardware (BDAP
+  // class) the stack is always on - the firmware is the safety authority.
+  bool ecm_owned_safety;
+
   // --- which dials this hardware actually has ---
   // One fuel dial per heater, never both: BDAP takes a real pump frequency
   // (Hz), the Vevor takes a power level (1-10). The entity guards use these so
@@ -115,6 +122,7 @@ inline HeaterProfile profile_jeabong_8kw() {
   p.temp_min = 0;
   p.temp_max = 30;
   p.heat_mode_manual = false;  // HEAT modulates like AUTO (original behaviour)
+  p.ecm_owned_safety = false;   // BDAP: the firmware is the combustion-safety authority
   p.has_pump_hz_control = true;    // BDAP: real pump frequency field
   p.has_power_level_control = false;
   p.has_fan_rpm_control = true;    // BDAP: real fan RPM field
@@ -161,6 +169,7 @@ inline HeaterProfile profile_vevor_2kw() {
   p.temp_min = 0;
   p.temp_max = 30;
   p.heat_mode_manual = false;  // v1: firmware keeps modulating HEAT
+  p.ecm_owned_safety = true;   // Vevor ECM: self-primes, self-derates, reports E-codes
   p.has_pump_hz_control = false;   // Vevor: pump Hz is ECM-derived, not commandable
   p.has_power_level_control = true; // Vevor: the one fuel dial (1-10)
   p.has_fan_rpm_control = false;   // Vevor: no fan field exists (probe bytes ignored)

@@ -49,6 +49,8 @@ class BdapDriver : public HeaterProtocolDriver {
   // Build the 24-byte controller frame from the pushed inputs + telemetry.
   // `command` is the TX byte-2 value (pass CMD_NO_CHANGE / CMD_START / CMD_STOP
   // via the public constants below; loop() consumes the pending one).
+  // Fan RPM is received pre-computed in ControlInputs (CombustionSafety,
+  // facade) - the driver only encodes it.
   void build_frame(uint8_t frame[24], uint8_t command) const;
   // Parse a 24-byte heater status frame into telemetry_. Returns false on
   // invalid length (CRC mismatch logs but parses, as before).

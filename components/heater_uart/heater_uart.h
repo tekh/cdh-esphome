@@ -12,40 +12,30 @@
 #include <memory>
 #include <string>
 
+#include "heater_policies.h"
 #include "heater_profile.h"
 #include "heater_protocol_driver.h"
 
 namespace esphome {
 namespace heater_uart {
 
-// Ambient temperature limit for HEAT mode safety (configurable via config)
-static const float AMBIENT_HEAT_LIMIT = 26.0f;
-
-enum class HeaterMode : uint8_t {
-  OFF = 0,   // Heater stays off
-  AUTO = 1,  // Thermostat controls - auto-shutdown/restart enabled
-  ON = 2     // Force heater on, bypass thermostat (safety limits still apply)
-};
-
 // Operating voltage options (encoded into BDAP TX byte 11)
 static const uint8_t VOLTAGE_12V = 0x78;  // 120 = 12.0V
 static const uint8_t VOLTAGE_24V = 0xF0;  // 240 = 24.0V
 
-// Pump adjustment timing - thermal mass means changes take time to show effect
-static const uint32_t PUMP_ADJUST_INTERVAL_MS = 5000;  // 5 seconds between adjustments
-
-// Fuel priming run length (60 s pump-only). Moves into Tuning/YAML at Phase 3
-// of the refactor (ROADMAP.md).
+// Fuel priming run length (60 s pump-only). Moves into Tuning/YAML at the
+// tuning-exposure step (ROADMAP.md Phase 4).
 static const uint32_t PRIMING_DURATION_MS = 60000;
 
 // Run-state constants and the protocol driver live in heater_protocol_driver.h
 // (included above): RUN_STATE_*, HeaterProtocolDriver, Telemetry, ControlInputs.
+// The policies (Thermostat / CombustionSafety / RoomSensorGuard) live in
+// heater_policies.h.
 
-// HeaterUart is the ESHome facade: entity registry + publishing, user/mode
-// intent, room-sensor health, priming, and the thermostat/safety policy (the
-// Phase 3 extraction moves the policy out). All protocol-specific behaviour -
-// framing, cadence, echo, checksums, encode/decode - lives behind
-// HeaterProtocolDriver (BdapDriver / VevorDriver), selected by the profile.
+// HeaterUart is the ESPHome facade: entity registry + publishing, user/mode
+// intent, and orchestration of the three policies and the protocol driver.
+// All protocol-specific behaviour - framing, cadence, echo, checksums,
+// encode/decode - lives behind HeaterProtocolDriver (BdapDriver / VevorDriver).
 class HeaterUart : public PollingComponent, public uart::UARTDevice, public ByteStream {
  public:
   HeaterUart() = default;
@@ -70,6 +60,7 @@ class HeaterUart : public PollingComponent, public uart::UARTDevice, public Byte
   void set_auto_shutdown_hysteresis(float hysteresis) { this->auto_shutdown_hysteresis_ = hysteresis; }
   void set_approach_threshold(float threshold) { this->approach_threshold_ = threshold; }
   void set_ambient_heat_limit(float limit) { this->ambient_heat_limit_ = limit; }
+  void set_firmware_safety_oversight(bool enabled) { this->firmware_safety_oversight_ = enabled; }
 
   // Heater mode control
   void set_heater_mode(HeaterMode mode);
@@ -110,23 +101,24 @@ class HeaterUart : public PollingComponent, public uart::UARTDevice, public Byte
   // could trigger a blind start). 2026-10-20, user requirement.
   bool is_room_sensor_stale() const;
   // Accept a fresh external room-sensor reading only if it is valid (non-NaN)
-  // AND physically plausible (within ROOM_TEMP_MAX_STEP of the last accepted
-  // value per sensor interval). A DHT22 right after a failed read can emit a
-  // garbage-but-valid sample (2026-10-21: 18.4C against a 19.2C trend, which
-  // tripped a false standby->start); such samples are rejected and the last
-  // trusted value is held. At boot, no single sample may become the baseline:
-  // the first ROOM_TEMP_BOOT_SAMPLES distinct readings (>=5 s apart, ~30 s
-  // total) must agree within ROOM_TEMP_BOOT_MAX_SPREAD, and the baseline is
-  // the median of the three. Until then the sensor counts as stale, so AUTO
-  // keeps the heater off (the safe state right after a reboot anyway).
+  // AND physically plausible (within RoomSensorGuard::MAX_STEP of the last
+  // accepted value per sensor interval). A DHT22 right after a failed read
+  // can emit a garbage-but-valid sample (2026-10-21: 18.4C against a 19.2C
+  // trend, which tripped a false standby->start); such samples are rejected
+  // and the last trusted value is held. At boot, no single sample may become
+  // the baseline: the first 3 distinct readings (>=5 s apart, ~30 s total)
+  // must agree within 2.0C, and the baseline is the median of the three.
+  // Until then the sensor counts as stale, so AUTO keeps the heater off (the
+  // safe state right after a reboot anyway).
   // Returns true if the reading was accepted.
   bool refresh_room_temperature();
-  float get_current_temperature() const { return current_temperature_value_; }
-  float get_pump_frequency_setting() const { return pump_freq_setting_; }
-  bool is_in_auto_shutdown() const { return in_auto_shutdown_; }
-  bool is_in_standby() const { return in_standby_; }
+  float get_current_temperature() const { return room_sensor_.value(); }
+  float get_pump_frequency_setting() const { return thermostat_.pump_request(); }
+  bool is_in_auto_shutdown() const { return thermostat_.in_auto_shutdown(); }
+  bool is_in_standby() const { return thermostat_.in_standby(); }
   HeaterMode get_heater_mode() const { return heater_mode_; }
   bool is_priming() const { return is_priming_; }
+  bool safety_oversight_active() const { return safety_.oversight(); }
 
   // Active profile accessors (used by the number entities for clamping)
   const HeaterProfile &get_profile() const { return profile_; }
@@ -149,7 +141,7 @@ class HeaterUart : public PollingComponent, public uart::UARTDevice, public Byte
   // Temperature number reference (for state sync)
   number::Number *temperature_number_{nullptr};
 
-  // External temperature sensor (room temperature in standalone mode)
+  // External temperature sensor (room temperature)
   sensor::Sensor *external_temp_sensor_{nullptr};
 
   // Pump frequency number reference (for state sync)
@@ -171,42 +163,28 @@ class HeaterUart : public PollingComponent, public uart::UARTDevice, public Byte
   // Selected by profile_.protocol in setup().
   std::unique_ptr<HeaterProtocolDriver> driver_;
 
-  // --- Controller state (mode/intent; the driver holds wire-level intent) ---
+  // Controller policies (ROADMAP.md Phase 3)
+  Thermostat thermostat_;
+  CombustionSafety safety_;
+  RoomSensorGuard room_sensor_;
+
+  // --- Facade configuration / state ---
   uint8_t operating_voltage_ = VOLTAGE_12V;
   uint16_t altitude_ = 750;              // Altitude in metres (affects combustion)
   float desired_temp_setting_ = 19.0f;   // Desired temperature. 2026-10-20: default 22.0 -> 19.0 (post-reboot state; mode default is already OFF)
-  float pump_freq_setting_ = 1.6f;       // Fuel request in the profile's Hz domain (normalized at the TX boundary)
-  float pump_freq_user_request_ = 1.6f;  // User's requested setting (Hz). On profiles with heat_mode_manual the firmware sends THIS verbatim in HEAT/state-5 instead of modulating, and the pump number entity mirrors it (so the displayed setpoint never gets clobbered by the ignition warm-up ramp).
-  float temp_backoff_offset_ = 0.5f;     // RESERVED: accepted from YAML (temperature_backoff) and stored, but v1 never read it in any logic path - kept so the YAML key stays valid; becomes a real Tuning key at Phase 3 (ROADMAP.md).
-  bool in_cooldown_ = false;             // Cooldown mode active (fan running to cool HX)
-  uint32_t last_pump_adjust_time_ = 0;   // Last time pump frequency was adjusted
+  float temp_backoff_offset_ = 0.5f;     // RESERVED: accepted from YAML (temperature_backoff) and stored, but v1 never read it in any logic path - kept so the YAML key stays valid; becomes a real Tuning key at the tuning-exposure step (ROADMAP.md).
 
-  // Auto-shutdown configuration (used in AUTO mode)
+  // Auto-shutdown configuration (passed into Thermostat::Params each tick)
   float auto_shutdown_overshoot_ = 0.5f;   // Temperature overshoot before auto-shutdown (°C)
   float auto_shutdown_hysteresis_ = 1.5f;  // Temperature drop before auto-restart (°C)
   float approach_threshold_ = 1.0f;        // Start reducing pump when within this of target (°C)
-  bool in_auto_shutdown_ = false;          // Currently in auto-shutdown state
-  bool in_standby_ = false;                // Waiting for temp to drop before starting (AUTO mode)
+  bool firmware_safety_oversight_ = true;  // gated: false only honoured on ecm_owned_safety profiles
 
   // Fuel priming state
   bool is_priming_ = false;                // Fuel priming active
   uint32_t priming_start_time_ = 0;        // Time when priming started (millis)
 
-  // Room temperature (external sensor, physics-guarded; see
-  // refresh_room_temperature())
-  float current_temperature_value_ = 0;
-  uint32_t last_valid_room_temp_time_ = 0;  // millis() of the last ACCEPTED room-sensor reading; 0 = none yet (treated as stale after 10 min)
-  static const uint32_t ROOM_SENSOR_TIMEOUT_MS = 10 * 60 * 1000;  // 10 min without an accepted room reading = sensor fault
-  static constexpr float ROOM_TEMP_MAX_STEP = 0.5f;  // max plausible room-temp change per 10s sensor interval (observed field rate ~0.3C/min); larger jumps are DHT22 glitch samples
-  bool room_temp_accepted_ever_ = false;  // baseline established (via boot consensus); the first valid reading alone is NOT accepted
-  static constexpr float ROOM_TEMP_BOOT_MAX_SPREAD = 2.0f;  // the first 3 boot samples must agree within this spread to establish the baseline (physical drift over ~30s is ~0.05C, so wider means a bad sample)
-  static constexpr uint8_t ROOM_TEMP_BOOT_SAMPLES = 3;
-  static constexpr uint32_t ROOM_TEMP_BOOT_MIN_SPACING_MS = 5000;  // counted boot samples must be >=5 s apart (sensor interval is 10 s) so each is a distinct DHT22 conversion, not a re-read of the same value
-  float room_temp_boot_sample_[ROOM_TEMP_BOOT_SAMPLES] = {0.0f, 0.0f, 0.0f};
-  uint8_t room_temp_boot_sample_count_ = 0;
-  uint32_t room_temp_boot_last_sample_time_ = 0;
-
-  // Last parsed telemetry mirror for publishing (copied on each fresh frame)
+  // Telemetry mirror for update() publishing (copied on each fresh frame)
   int fan_speed_value_ = 0;
   float supply_voltage_value_ = 0;
   float heat_exchanger_temp_value_ = 0;
@@ -224,9 +202,7 @@ class HeaterUart : public PollingComponent, public uart::UARTDevice, public Byte
   std::string error_code_description_ = "Unknown";
 
   // Driver plumbing: called when loop() received at least one fresh frame.
-  void on_fresh_frame();
-  // Shared thermostat/safety logic (both protocols call this after parsing)
-  void thermostat_control();
+  void on_fresh_frame(const Thermostat::Params &params);
 };
 
 }  // namespace heater_uart

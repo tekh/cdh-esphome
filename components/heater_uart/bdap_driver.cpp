@@ -197,28 +197,9 @@ void BdapDriver::build_frame(uint8_t frame[24], uint8_t command) const {
   frame[5] = pump_freq_raw;
   frame[6] = pump_freq_raw;
 
-  // Bytes 7-10: fan RPM (min = max = fixed RPM mode).
-  // NOTE: control policy, moved verbatim from the old build_tx_frame - moves
-  // into SafetyPolicy at Phase 3.
-  uint16_t fan_rpm;
-  if (inputs_.cooldown_active || telemetry_.run_state == RUN_STATE_COOLDOWN) {
-    // Cooldown: run fan at high speed to cool the heat exchanger
-    fan_rpm = profile_->cooldown_fan_rpm;
-  } else if (telemetry_.run_state == RUN_STATE_IGNITED &&
-             telemetry_.hx_temp < profile_->ignition_hx_threshold) {
-    // State 4 (Ignited) with HX below threshold: hold moderate fan speed for
-    // stable combustion while the pump ramps
-    fan_rpm = profile_->ignition_fan_rpm;
-    HEATER_LOGD(TAG, "Ignition: HX %.0f°C < %.0f°C, fan at ignition speed %u RPM",
-                telemetry_.hx_temp, profile_->ignition_hx_threshold, fan_rpm);
-  } else {
-    // Normal operation: scale fan proportionally with fuel rate to keep
-    // combustion air matched to fuel.
-    const float pump_ratio = output_domain::clamp01(
-        (hz - profile_->pump_freq_min) / (profile_->pump_freq_max - profile_->pump_freq_min));
-    fan_rpm = static_cast<uint16_t>(profile_->fan_rpm_min +
-                                    pump_ratio * (profile_->fan_rpm_max - profile_->fan_rpm_min));
-  }
+  // Bytes 7-10: fan RPM (min = max = fixed RPM mode). Pre-computed by
+  // CombustionSafety (facade, host-tested) and received in ControlInputs.
+  const uint16_t fan_rpm = inputs_.fan_rpm;
   frame[7] = (fan_rpm >> 8) & 0xFF;
   frame[8] = fan_rpm & 0xFF;
   frame[9] = (fan_rpm >> 8) & 0xFF;

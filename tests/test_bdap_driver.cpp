@@ -62,6 +62,7 @@ TEST(bdap_tx_frame_layout) {
   d.begin(nullptr, p, 0x78, 750);
   ControlInputs in;
   in.output_fraction = 0.5f;                       // -> 3.4 Hz
+  in.fan_rpm = 2975;                               // pre-computed by CombustionSafety
   in.desired_temp = 19.5f;
   in.room_temp = 18.0f;
   d.update_inputs(in);
@@ -111,39 +112,6 @@ TEST(bdap_tx_priming_overrides_pump) {
   CHECK(f[6] == 50);
   CHECK(f[16] == 50);
   CHECK(f[17] == 0x5A);     // manual priming mode
-}
-
-TEST(bdap_tx_cooldown_fan) {
-  const HeaterProfile p = bdap_profile();
-  BdapDriver d;
-  d.begin(nullptr, p, 0x78, 750);
-  ControlInputs in;
-  in.output_fraction = 0.9f;
-  in.cooldown_active = true;
-  d.update_inputs(in);
-
-  uint8_t f[24];
-  d.build_frame(f, BdapDriver::CMD_NO_CHANGE);
-  CHECK(f[7] == ((4000 >> 8) & 0xFF));   // cooldown fan RPM
-  CHECK(f[8] == (4000 & 0xFF));
-}
-
-TEST(bdap_tx_ignition_fan_hold) {
-  const HeaterProfile p = bdap_profile();
-  BdapDriver d;
-  d.begin(nullptr, p, 0x78, 750);
-  ControlInputs in;
-  in.output_fraction = 1.0f;  // full fuel...
-  d.update_inputs(in);
-  // ...but heater just ignited with HX below threshold -> ignition fan speed
-  // (state 4 injected via a crafted RX frame; hx 80 < 100 threshold)
-  const auto rx = make_rx(4, 1, 120, 1500, 80, 18, 0);
-  CHECK(d.parse_frame(rx.data(), rx.size()));
-
-  uint8_t f[24];
-  d.build_frame(f, BdapDriver::CMD_NO_CHANGE);
-  CHECK(f[7] == ((2000 >> 8) & 0xFF));   // ignition_fan_rpm
-  CHECK(f[8] == (2000 & 0xFF));
 }
 
 TEST(bdap_rx_parse_fields) {
