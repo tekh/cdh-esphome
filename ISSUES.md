@@ -44,7 +44,7 @@ Status markers: **OPEN** (actionable) · **PARKED** (deliberately deferred) ·
 5. **DECIDED 2026-10-24 — LCD injection mode removed.** The 48-byte sniff/injection
    path (`parse_frame`, `send_command`, `loop()` injection branch, `standalone_mode:`
    YAML key) was deleted: it was BDAP-only, never validated against real hardware
-   (no device target, item #1), and the multi-heater refactor (ROADMAP.md, Phase 1b)
+   (no device target, item #1), and the multi-heater refactor (DESIGN.md, Phase 1b)
    restructures its surroundings so it would not drop back in cleanly. Standalone is
    now the only mode. Recovery: `git tag lcd-injection-final` (the commit just before
    removal). Closes: nothing to close — abandoned by owner decision, not fixed.
@@ -59,7 +59,7 @@ Status markers: **OPEN** (actionable) · **PARKED** (deliberately deferred) ·
    hardware the flag is ignored with a warning. The room-sensor staleness gate
    and the ambient HEAT-mode limit are NOT part of the removable stack (owner
    requirements, 2026-10-20) and stay on everywhere. Implementation: Phase 3 of
-   ROADMAP.md — `HeaterUart::thermostat_control()` became the `Thermostat` class
+   the multi-heater refactor (DESIGN.md) — `HeaterUart::thermostat_control()` became the `Thermostat` class
    (pure, host-tested in `tests/`).
 
 ---
@@ -221,7 +221,7 @@ Status markers: **OPEN** (actionable) · **PARKED** (deliberately deferred) ·
     build since).
 
 17. **IMPLEMENTED 2026-10-24 — multi-heater architecture refactor complete
-    (ROADMAP.md Phases 0-5, all device-verified).** Landed on `main` (as the
+    (refactor Phases 0-5, all device-verified; DESIGN.md).** Landed on `main` (as the
     `arch_analysis` branch, renamed in 2026-10-24; the pre-refactor layout is
     preserved on the `vevor_2kw` branch and the old `main` tip is tagged
     `backup/main-pre-replace`). Component layout changed

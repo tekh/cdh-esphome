@@ -1,6 +1,7 @@
 # PROJECT KNOWLEDGE BASE
 
-Post-refactor layout (2026-10-24, ROADMAP.md all phases complete).
+Post-refactor layout (refactor completed 2026-10-24; `DESIGN.md` explains why
+the architecture is shaped this way).
 The pre-refactor code lives on the `vevor_2kw` branch (backup); the old
 LCD injection path is under tag `lcd-injection-final`.
 
@@ -35,7 +36,7 @@ ESPHome external component for UART communication with diesel heaters (BDAP 24-b
 │   ├── fuel_prime_button.h    # Fuel prime button entity
 │   └── heater_uart.json       # ESPHome component manifest (must list every .cpp)
 ├── tests/                     # Host-side test harness (make -C tests, plain g++)
-├── ROADMAP.md                 # Refactor decisions + phase status
+├── DESIGN.md                    # Why the architecture is this way (decisions, seams, phases)
 ├── ISSUES.md                  # Open/parked/decided items with evidence
 ├── @notes/bluetoothheater-master/  # Reference implementation (read-only)
 └── README.md                  # User docs incl. the "Adding a New Heater" checklist
