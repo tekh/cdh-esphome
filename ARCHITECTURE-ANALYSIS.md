@@ -5,6 +5,9 @@
 (1) does the current design survive N more heaters, and (2) what would it take to move
 **all tuneables into the YAML**?
 
+> **Status: superseded in part by `ROADMAP.md`** — the analysis below is the input;
+the roadmap is the accepted plan. The decisions taken from §6 are recorded there.
+
 ---
 
 ## 1. What the codebase is today
