@@ -53,7 +53,7 @@ The Hz↔level bridge disappears behind the **normalized output domain 0.0–1.0
 Guards: every subsequent phase's extracted logic lands with tests in the same
 commit. Verification: `make -C tests` green.
 
-### Phase 1 — de-duplication + dead-code removal ● (code done 2026-10-24; bench flash pending)
+### Phase 1 — de-duplication + dead-code removal ● (device-verified 2026-10-24)
 **1a. Single shared output mapping.** ✔ All four hand-copied level↔Hz↔ratio
 conversions collapsed into `heater_output.h` free functions (host-tested);
 ESPHome compile verified clean by the owner.
@@ -61,9 +61,9 @@ ESPHome compile verified clean by the owner.
 sniff/injection path and the `standalone_mode:` YAML key deleted, ambient-limit
 check and priming timeout unified into `standalone_loop()` before the protocol
 dispatch (`PRIMING_DURATION_MS` named constant).
-Verification: tests green ✔, owner ESPHome compile ☐, bench flash ☐.
+Verification: tests green ✔, owner ESPHome compile ✔, bench flash ✔.
 
-### Phase 2 — ProtocolDriver extraction ● (code done 2026-10-24; bench flash pending)
+### Phase 2 — ProtocolDriver extraction ● (device-verified 2026-10-24)
 `BdapDriver` / `VevorDriver` behind one interface (`heater_protocol_driver.h`):
 `begin()`, `loop()`, `request_start()/request_stop()/pulse_stop()`,
 `on_requested()`, `set_output` via ControlInputs (normalized 0..1), telemetry
@@ -73,9 +73,9 @@ thermostat policy (Phase 3 moves it out). Drivers own framing, echo discard,
 resync, checksums. Host tests: fake ByteStream, frame-layout goldens, TX state
 machines, decode rules (37 tests / 382 checks).
 Verification: tests green ✔, stub syntax check of facade+entities ✔, owner
-ESPHome compile ☐, bench flash ☐.
+ESPHome compile ✔, bench flash ✔.
 
-### Phase 3 — SafetyPolicy / ControlPolicy extraction ◐ (heater_policies landed; bench flash pending)
+### Phase 3 — SafetyPolicy / ControlPolicy extraction ● (device-verified 2026-10-24)
 - `heater_policies.h/.cpp` (pure C++, host-tested):
   - `Thermostat`: the whole `set_heater_mode()`-time and periodic machine —
     standby check, state-4 warm-up ramp, AUTO three-phase, HEAT modulating,
@@ -87,12 +87,17 @@ ESPHome compile ☐, bench flash ☐.
     cooldown completion monitor.
   - `RoomSensorGuard`: NaN rejection, glitch-step rejection, boot 3-sample
     consensus, staleness — pure and directly tested.
+- **3b landed**: `Thermostat::enter_mode()` now owns the mode-entry decisions
+  (AUTO start-vs-standby, stop-if-running, ON start level); one
+  `standby_threshold()` helper shared by the periodic control, auto-restart
+  and mode entry — the threshold formula that existed in 3 places is computed
+  in exactly one.
 - `standalone_mode:` guard removal fallout (Phase 1b) is complete.
 Recovery/decisions recorded in ISSUES.md.
-Remaining for this phase: owner ESPHome compile + bench flash (behavior
-must be identical), then Phase 4 opens the loop knobs to YAML.
+Verification: tests green ✔, owner ESPHome compile ✔, bench flash ✔ —
+AUTO/HEAT behavior, ambient limit, priming refusal, RX decode all unchanged.
 
-### Phase 4 — Tuning → YAML overrides ● (code done 2026-10-24; bench flash pending)
+### Phase 4 — Tuning → YAML overrides ● (device-verified 2026-10-24)
 Done: per-key optional YAML overrides over the compiled preset, in two
 groups: (a) profile tuning (pump freq min/max/step/initial/prime, fan RPMs,
 HX thresholds, fan_sensor/glow_power bytes, temp range) — setters mutate the
@@ -103,12 +108,17 @@ host-tested) reverts invariant-breaking combos to the preset at boot with a
 warning. NOT exposed: pump_epsilon (cannot discriminate — pinned by test),
 model-identity flags (heat_mode_manual, ecm_owned_safety, has_*_control),
 protocol timing (drivers), RoomSensorGuard constants (sensor facts).
-Verification: tests 81/586 ✔, stub-check ✔, owner compile ☐, bench ☐.
+Verification: tests 81/586 ✔, stub-check ✔, owner compile ✔, bench ✔ —
+behavior identical with all overrides commented out (defaults = v1
+constants byte-for-byte).
 
 ### Phase 5 — new-heater checklist ☐ (the maintainability payoff)
 Adding heater N = one profile factory (+ YAML overrides), one enum entry,
 one `cv.enum` line — and a `ProtocolDriver` **only if** the protocol is new.
-Write this checklist into `README.md` when Phase 2 lands.
+Phases 0–4 landed; write this checklist into `README.md` as the closing
+deliverable, verify the doc set tells one coherent story (README / AGENTS.md
+root + component / ROADMAP / ISSUES), and capture the finished initiative
+state to Hindsight.
 
 ## Phase gates
 
