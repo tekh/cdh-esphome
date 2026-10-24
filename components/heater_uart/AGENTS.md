@@ -2,7 +2,7 @@
 
 ESPHome component for diesel heater UART communication.
 
-## ARCHITECTURE (ROADMAP.md Phase 2)
+## ARCHITECTURE
 
 ```
 HeaterUart (facade: entities, intent, thermostat/safety policy, room sensor)

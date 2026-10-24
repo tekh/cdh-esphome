@@ -1,8 +1,8 @@
 # PROJECT KNOWLEDGE BASE
 
-**Generated:** 2026-04-19 (rewritten for the post-refactor layout 2026-10-24)
-**Commit:** 5a9d9c3
-**Branch:** main (the `arch_analysis` refactor branch, renamed in; the pre-refactor layout lives on `vevor_2kw`)
+Post-refactor layout (2026-10-24, ROADMAP.md all phases complete).
+The pre-refactor code lives on the `vevor_2kw` branch (backup); the old
+LCD injection path is under tag `lcd-injection-final`.
 
 ## OVERVIEW
 
@@ -105,13 +105,13 @@ ESPHome external component for UART communication with diesel heaters (BDAP 24-b
 
 ```yaml
 uart:
-  baud_rate: 4800  # BDAP (jeabong_8kw) = 25000 | Vevor (vevor_2kw) = 4800, inverted pins
+  baud_rate: 4800  # must match the selected profile: Vevor = 4800 (inverted pins) | BDAP = 25000
   tx_pin: GPIO17  # Same pin for half-duplex
   rx_pin: GPIO17
   rx_buffer_size: 512
 
 heater_uart:
-  heater_model: jeabong_8kw  # or vevor_2kw / vevor_2kw_v2 - required, selects the profile + protocol
+  heater_model: vevor_2kw_v2  # required - selects the profile + protocol (+ its baud)
   operating_voltage: "12V"  # or "24V"
 ```
 
@@ -124,7 +124,10 @@ heater_uart:
 - **Never** change baud rate from what the selected profile requires (25000 BDAP / 4800 Vevor)
 - **Never** use separate TX/RX pins in standalone mode (half-duplex)
 - **Don't** suppress frame validation errors - indicates wiring/protocol issues
-- **Don't** run `vevor_2kw` profile for live control until its provisional values are bench-validated
+- **Don't** run a brand-new heater profile for live control until its values are
+  bench-validated (the current ones are: `vevor_2kw_v2` in production; `vevor_2kw`
+  shares its tuning values, its unexercised part is the firmware-modulated HEAT
+  policy; `jeabong_8kw` parked per ISSUES.md #1)
 
 ## COMMON MODIFICATIONS
 
