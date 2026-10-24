@@ -219,7 +219,10 @@ Status markers: **OPEN** (actionable) · **PARKED** (deliberately deferred) ·
     available. Compile-verified (COMPILE_EXIT=0, flash 49.9%); pending flash.
 
 17. **IMPLEMENTED 2026-10-24 — multi-heater architecture refactor complete
-    (ROADMAP.md Phases 0-5, all device-verified).** Component layout changed
+    (ROADMAP.md Phases 0-5, all device-verified).** Landed on `main` (as the
+    `arch_analysis` branch, renamed in 2026-10-24; the pre-refactor layout is
+    preserved on the `vevor_2kw` branch and the old `main` tip is tagged
+    `backup/main-pre-replace`). Component layout changed
     significantly: `heater_uart.cpp` is now a facade over `heater_policies.*`
     (Thermostat / CombustionSafety / RoomSensorGuard, pure + host-tested) and
     per-protocol drivers (`bdap_driver.*` / `vevor_driver.*` behind

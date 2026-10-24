@@ -1,8 +1,8 @@
 # PROJECT KNOWLEDGE BASE
 
-**Generated:** 2026-04-19
-**Commit:** 5a9ed63
-**Branch:** full_control_w_autoshutoff
+**Generated:** 2026-04-19 (rewritten for the post-refactor layout 2026-10-24)
+**Commit:** 5a9d9c3
+**Branch:** main (the `arch_analysis` refactor branch, renamed in; the pre-refactor layout lives on `vevor_2kw`)
 
 ## OVERVIEW
 
