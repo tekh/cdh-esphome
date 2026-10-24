@@ -48,20 +48,20 @@ The Hz↔level bridge disappears behind the **normalized output domain 0.0–1.0
 
 ## Phases
 
-### Phase 0 — host test harness ●
+### Phase 0 — host test harness ● (2026-10-24, 16 tests / 232 checks)
 `tests/` with a header-only micro-framework (no network/deps) + `make -C tests`.
 Guards: every subsequent phase's extracted logic lands with tests in the same
 commit. Verification: `make -C tests` green.
 
-### Phase 1 — de-duplication + dead-code removal ◐
-**1a. Single shared output mapping.** All four hand-copied level↔Hz↔ratio
-conversions collapse into `heater_output.h` free functions (host-testable).
-**1b. LCD injection removal.** Tag `lcd-injection-final`, then delete the
-48-byte sniff/injection path (and the `standalone_mode:` YAML key — standalone
-becomes the only mode). Unify the ambient-limit check and priming timeout
-duplicated across both protocol loops.
-Verification: tests green, bench flash of `lab-heater-butler.yaml` behaves
-identically on the Vevor.
+### Phase 1 — de-duplication + dead-code removal ● (code done 2026-10-24; bench flash pending)
+**1a. Single shared output mapping.** ✔ All four hand-copied level↔Hz↔ratio
+conversions collapsed into `heater_output.h` free functions (host-tested);
+ESPHome compile verified clean by the owner.
+**1b. LCD injection removal.** ✔ Tag `lcd-injection-final` set, 48-byte
+sniff/injection path and the `standalone_mode:` YAML key deleted, ambient-limit
+check and priming timeout unified into `standalone_loop()` before the protocol
+dispatch (`PRIMING_DURATION_MS` named constant).
+Verification: tests green ✔, owner ESPHome compile ☐, bench flash ☐.
 
 ### Phase 2 — ProtocolDriver extraction ☐
 Extract `BdapDriver` / `VevorDriver` behind one interface: `begin()`,
