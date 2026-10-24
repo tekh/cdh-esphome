@@ -320,7 +320,7 @@ notes:
 
 ```yaml
 external_components:
-  - source: github://daoudeddy/cdh-esphome@main
+  - source: github://tekh/cdh-esphome@main
     components: [ heater_uart ]
 
 # Standalone mode uses single-wire half-duplex UART
@@ -433,6 +433,29 @@ button:
 - **Off**: Forces heater off. Use this when you don't want the heater to run.
 - **Auto**: Thermostat mode. Heater will auto-start when cold and auto-shutdown when warm.
 - **On**: Forces heater on, bypassing thermostat. Safety limits (heat exchanger temperature) AND ambient heat limit still apply.
+
+## Credits
+
+This project is a heavily modified derivative of the work of the community
+around Chinese diesel heater UART control:
+
+- **[daoudeddy/cdh-esphome](https://github.com/daoudeddy/cdh-esphome)** — the
+  upstream ESPHome component this codebase started from. The UART frame
+  handling, entity structure and standalone thermostat concept are its
+  inheritance; everything since the `arch_analysis` refactor (drivers,
+policies, profiles, YAML tuning) is built on top of it.
+- **[bidon583/bluetoothheater](https://github.com/bidon583/bluetoothheater)** —
+  the classic "blue wire" reference implementation; a copy is kept
+  read-only under `@notes/bluetoothheater-master/` for byte-layout reference.
+- **[zatakon/esphome-vevor-heater](https://github.com/zatakon/esphome-vevor-heater)**
+  — reverse engineering of the Vevor `0xAA/0x66/0x77` protocol that the
+  `vevor_driver` implements (states, error codes, signed HX temperature).
+- **"V9 - Hacking the Chinese Diesel Heater Communications Protocol"** (kept
+  in `@notes/`) — the community document for the classic BDAP 0x76/0x16
+  protocol.
+
+Protocol evidence gathered on this project's own bench lives in
+`@notes/vevor-protocol.md`.
 
 ## Development
 
