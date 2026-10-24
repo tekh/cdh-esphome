@@ -1,12 +1,15 @@
 # Architecture Analysis: Multi-Heater Support at a Crossroad
 
-**Branch:** `arch_analysis` · **Date:** 2026-04-19 · **Base:** `vevor_2kw` @ 7f6482b
+**Branch:** analysed on `arch_analysis`, now `main` (renamed in 2026-10-24) · **Date:** 2026-04-19 · **Base:** `vevor_2kw` @ 7f6482b
 **Scope:** top-to-bottom review of `components/heater_uart/` with two questions in mind:
 (1) does the current design survive N more heaters, and (2) what would it take to move
 **all tuneables into the YAML**?
 
-> **Status: superseded in part by `ROADMAP.md`** — the analysis below is the input;
-the roadmap is the accepted plan. The decisions taken from §6 are recorded there.
+> **Status: fully superseded — `ROADMAP.md` executed, all six phases complete and
+> device-verified (2026-10-24).** Everything below describes the *pre-refactor*
+> codebase (the god class, the four level↔Hz copies, the missing harness); it is
+> kept as the "why" for every seam that now exists, and for the decision record
+> in §6 → ROADMAP.md decisions #1-7.
 
 ---
 

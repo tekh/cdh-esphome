@@ -194,7 +194,7 @@ Status markers: **OPEN** (actionable) · **PARKED** (deliberately deferred) ·
     (COMPILE_EXIT=0) and deployed 2026-10-21; live-verified via HA entity
     freshness (same check as item 14).
 
-16. **FIXED 2026-10-21 (pending flash) — boot baseline: one first sample could
+16. **DEPLOYED 2026-10-24 — boot baseline: one first sample could
     become the guard reference (3-sample consensus).**
     Gap in the item 15 design: the first valid sample after boot was accepted
     unconditionally (no baseline to compare). A DHT22 misfiring on its first
@@ -216,7 +216,9 @@ Status markers: **OPEN** (actionable) · **PARKED** (deliberately deferred) ·
     reboot, when the relay has just de-energized. Residual known limitation:
     a *consistent* bad value (e.g. stuck 0.0) passes consensus — sampling
     alone cannot distinguish it from a true value, and no cross-reference is
-    available. Compile-verified (COMPILE_EXIT=0, flash 49.9%); pending flash.
+    available. Compile-verified (COMPILE_EXIT=0, flash 49.9%) on 2026-10-21;
+    deployed with the subsequent 2026-10-24 rebuild/flash (it is in every
+    build since).
 
 17. **IMPLEMENTED 2026-10-24 — multi-heater architecture refactor complete
     (ROADMAP.md Phases 0-5, all device-verified).** Landed on `main` (as the
