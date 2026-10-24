@@ -28,7 +28,9 @@ This project is a custom ESPHome component designed to interface with heaters us
   - Run State
   - Error Code
 - **Button**:
-  - Fuel Prime (60s pump-only run for bleeding air)
+  - Fuel Prime (60s pump-only run for bleeding air; **BDAP only** - the Vevor
+    protocol has no prime command and its ECM self-primes, so the button is a
+    no-op on `vevor_2kw_*` and just logs a warning)
 - **Automatic Temperature Control**:
   - Auto-shutdown when target temperature is reached
   - Auto-restart when temperature drops below threshold
@@ -411,7 +413,7 @@ binary_sensor:
 button:
   - platform: heater_uart
     fuel_prime:
-      name: "Fuel Prime"
+      name: "Fuel Prime"   # BDAP only - on vevor_2kw_* the ECM self-primes; the button logs a warning
 ```
 
 ### Notes

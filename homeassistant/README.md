@@ -25,6 +25,9 @@ If you rename `esphome: name:` in `lab-heater-butler.yaml`, replace every
 Everything it shows is declared in `lab-heater-butler.yaml`: the mode select,
 target-temperature and power-level dials, the DHT22 room sensors, all
 `heater_uart` sensors (incl. `power_level_actual`), the four binary sensors,
-the run-state / error-code text sensors, and the fuel-prime button. The red
+the run-state / error-code text sensors, and the fuel-prime button (a **no-op
+on this Vevor device** - the protocol has no prime command and the ECM
+self-primes; pressing it only logs a warning on the ESPHome side).
+The red
 error panel only appears when `text_sensor.lab_heater_error_code` ≠ "No
 Error".

@@ -250,6 +250,10 @@ button:
     id: fuel_prime_button
     heater_uart_id: heater
     icon: "mdi:fuel"
+    # NOTE: no-op on this device - the Vevor protocol has no pump-prime
+    # command (the ECM self-primes on every start), so pressing it only
+    # logs a warning. Declared anyway so the entity exists if this YAML is
+    # ever pointed at a BDAP heater (where it runs a 60s pump-only run).
     web_server:
       sorting_group_id: sorting_group_controls
 
