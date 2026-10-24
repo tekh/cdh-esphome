@@ -5,7 +5,8 @@ ESPHome component for diesel heater UART communication.
 ## ARCHITECTURE
 
 ```
-HeaterUart (facade: entities, intent, thermostat/safety policy, room sensor)
+HeaterUart (facade: entities, intent, policy→driver wiring, room sensor guard,
+             priming - all policy logic lives in heater_policies.cpp)
      │  ByteStream (transport interface)
      ▼
 HeaterProtocolDriver ── BdapDriver (0x76/0x16 @ 25000) | VevorDriver (0xAA/0x66 @ 4800)
@@ -23,7 +24,7 @@ EXISTING protocol = profile only; a NEW protocol = one new driver.
 | `heater_uart.cpp/h` | Facade: entity registry/publishing, mode intent, policy→driver wiring, priming (BDAP-only) |
 | `heater_protocol_driver.h` | Driver seam: ByteStream, Telemetry, ControlInputs, interface, shared run-state names |
 | `bdap_driver.cpp/h` | BDAP framing/cadence/echo/parse, CRC-16; encodes `ControlInputs` (fan RPM arrives pre-computed from `CombustionSafety`) |
-| `vevor_driver.cpp/h` | Vevor framing, TX state machine, level encoding + altitude derate, RX decode, error map, fan probe |
+| `vevor_driver.cpp/h` | Vevor framing, TX state machine, level encoding + altitude derate, RX decode, error map, fan probe (dead experiment - ECM ignores the bytes; see ISSUES Reference) |
 | `heater_policies.h/.cpp` | Controller policies: Thermostat (AUTO/HEAT state machine incl. mode entry + auto-restart), CombustionSafety (HX overrides, BDAP fan, cooldown monitor), RoomSensorGuard (DHT22 physics guard) |
 | `heater_profile.h` | Per-model tuning presets + capability flags + `validate_profile_invariants()` (YAML-override repair) |
 | `heater_output.h` | The one fuel-domain conversion (normalized ↔ Hz ↔ level), host-tested |
@@ -36,8 +37,10 @@ EXISTING protocol = profile only; a NEW protocol = one new driver.
 | `select.py` | Mode: Off/Auto/Heat |
 | `button.py` | Fuel priming button (BDAP-only) |
 | `heater_*.cpp/h` | C++ implementations for number/select entities |
+| `heater_uart.json` | ESPHome component manifest - must list every `.cpp` (a new driver file breaks the build until added) |
 
-Host tests: `tests/` (`make -C tests`, plain g++) pin frame layouts, the TX
+Host tests live at the **repo root** in `tests/` (`make -C tests`, plain g++ -
+run from the repo root, not this directory) and pin frame layouts, the TX
 state machines, decode rules and profile invariants - run before committing.
 
 ## ADDING ENTITIES
