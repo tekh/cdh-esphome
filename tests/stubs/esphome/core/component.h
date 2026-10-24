@@ -17,7 +17,7 @@ class Component {
 
 class PollingComponent : public Component {
  public:
-  explicit PollingComponent(uint32_t update_interval = 5000) {}
+  explicit PollingComponent(uint32_t update_interval = 5000) { (void) update_interval; }
   uint32_t get_update_interval() const { return 5000; }
   void set_update_interval(uint32_t) {}
 };

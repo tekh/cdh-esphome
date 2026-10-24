@@ -141,9 +141,9 @@ void HeaterUart::on_fresh_frame(const Thermostat::Params &params) {
         return;  // Skip thermostat logic during cooldown
     }
 
-    // Room-sensor staleness is computed by the guard; the thermostat implements
-    // the health gate (stop + block) and the standby/thermostat/safety machine.
-    const bool stale = room_sensor_.stale(millis());
+    // The thermostat implements the health gate (stop + block) and the
+    // standby/thermostat/safety machine; staleness arrives via Params
+    // (computed once per tick in loop()).
     const Thermostat::Result r =
         thermostat_.control(tlm, room_sensor_.value(), desired_temp_setting_, heater_mode_, params, millis());
 

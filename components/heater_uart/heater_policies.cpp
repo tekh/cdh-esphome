@@ -283,7 +283,7 @@ Thermostat::Result Thermostat::control(const Telemetry &tlm, float room_temp, fl
 
         if (room_temp < restart_threshold) {
             HEATER_LOGI(TAG, "Auto-restart: room %.1f°C < target %.1f°C - %.1f°C hysteresis",
-                        room_temp, target_temp, params.auto_shutdown_hysteresis_);
+                        room_temp, target_temp, params.auto_shutdown_hysteresis);
             out.request_start = true;
             pump_freq_setting_ = profile.pump_freq_initial;
             last_pump_adjust_time_ = now;
