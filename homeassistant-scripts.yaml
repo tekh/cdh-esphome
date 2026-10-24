@@ -1,4 +1,5 @@
-# used for lab_heater (cdh-esphome)
+# used for lab_heater (cdh-esphome) - entity ids follow the `lab-heater`
+# ESPHome node name, so they are stable as long as the node stays named that.
 heater_temp_up:
   alias: "Heater Temp Up"
   mode: restart

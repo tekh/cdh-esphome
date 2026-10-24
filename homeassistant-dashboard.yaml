@@ -1,4 +1,3 @@
-### Remember to rename the entities. currently I need to add lab_heater_
 type: vertical-stack
 cards:
   - type: glance
@@ -13,9 +12,9 @@ cards:
         name: Desired Temp
         icon: mdi:thermometer
       - entity: sensor.lab_heater_current_temperature
-        name: Room Temp
+        name: Ambient
         icon: mdi:fire
-      - entity: sensor.lab_heater_run_state
+      - entity: text_sensor.lab_heater_run_state
         name: Status
         icon: mdi:information
   - type: horizontal-stack
@@ -112,10 +111,6 @@ cards:
         unit: °C
         min: 0
         max: 35
-        severity:
-          green: 18
-          yellow: 15
-          red: 10
   - type: entities
     title: Heater Diagnostics
     show_header_toggle: false
@@ -123,6 +118,9 @@ cards:
       - entity: sensor.lab_heater_fan_speed
         name: Fan Speed
         icon: mdi:fan
+      - entity: sensor.lab_heater_power_level_actual
+        name: Power Level (actual)
+        icon: mdi:fan-speed-high
       - entity: sensor.lab_heater_pump_frequency
         name: Pump Frequency
         icon: mdi:fuel
@@ -143,13 +141,13 @@ cards:
         icon: mdi:flash-outline
   - type: conditional
     conditions:
-      - entity: sensor.lab_heater_error_code
+      - entity: text_sensor.lab_heater_error_code
         state_not: No Error
     card:
       type: entities
       title: Error
       entities:
-        - entity: sensor.lab_heater_error_code
+        - entity: text_sensor.lab_heater_error_code
           name: Error Code
           icon: mdi:alert-circle
   - type: entities
