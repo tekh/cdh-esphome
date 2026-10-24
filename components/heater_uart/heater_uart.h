@@ -64,6 +64,7 @@ class HeaterUart : public PollingComponent, public uart::UARTDevice, public Byte
   // Configuration setters
   void set_heater_model(HeaterModel model) { this->profile_ = profile_for(model); }
   void set_operating_voltage(uint8_t voltage) { this->operating_voltage_ = voltage; }
+  void set_temperature_backoff(float offset) { this->temp_backoff_offset_ = offset; }
   void set_altitude(uint16_t altitude) { this->altitude_ = altitude; }
   void set_auto_shutdown_overshoot(float overshoot) { this->auto_shutdown_overshoot_ = overshoot; }
   void set_auto_shutdown_hysteresis(float hysteresis) { this->auto_shutdown_hysteresis_ = hysteresis; }
@@ -176,6 +177,7 @@ class HeaterUart : public PollingComponent, public uart::UARTDevice, public Byte
   float desired_temp_setting_ = 19.0f;   // Desired temperature. 2026-10-20: default 22.0 -> 19.0 (post-reboot state; mode default is already OFF)
   float pump_freq_setting_ = 1.6f;       // Fuel request in the profile's Hz domain (normalized at the TX boundary)
   float pump_freq_user_request_ = 1.6f;  // User's requested setting (Hz). On profiles with heat_mode_manual the firmware sends THIS verbatim in HEAT/state-5 instead of modulating, and the pump number entity mirrors it (so the displayed setpoint never gets clobbered by the ignition warm-up ramp).
+  float temp_backoff_offset_ = 0.5f;     // RESERVED: accepted from YAML (temperature_backoff) and stored, but v1 never read it in any logic path - kept so the YAML key stays valid; becomes a real Tuning key at Phase 3 (ROADMAP.md).
   bool in_cooldown_ = false;             // Cooldown mode active (fan running to cool HX)
   uint32_t last_pump_adjust_time_ = 0;   // Last time pump frequency was adjusted
 
