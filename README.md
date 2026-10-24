@@ -76,11 +76,14 @@ heater_uart:
 | `heater_model` | Heater | Protocol | Baud | Pump freq (Hz) | Fan (RPM) | HX critical | Status |
 |---|---|---|---|---|---|---|---|
 | `jeabong_8kw` | Jeabong 8kW | BDAP `0x76/0x16` | 25000 | 1.3 - 5.5 | 1450 - 4500 | 265 °C | Validated on the original reference hardware |
-| `vevor_2kw` | Vevor 2kW (XMZ-D2) | Vevor `0xAA/0x66/0x77` | 4800 | 0.5 - 2.5 | 900 - 3000 | 205 °C | **PROVISIONAL** - comms layer written, bench-verification in progress |
+| `vevor_2kw` | Vevor 2kW (XMZ-D2) | Vevor `0xAA/0x66/0x77` | 4800 | 0.5 - 2.5 | 900 - 3000 | 205 °C | Same hardware as v2; the firmware-modulated HEAT policy is the unexercised part |
+| `vevor_2kw_v2` | Vevor 2kW (XMZ-D2), user owns the level in HEAT | Vevor `0xAA/0x66/0x77` | 4800 | 0.5 - 2.5 | 900 - 3000 | 205 °C | **In production** (lab-heater-butler.yaml); bench-verified incl. fault guards; open tuning items in ISSUES.md #5-10 |
 
-> ⚠️ **`vevor_2kw` is provisional**: its profile values are initial estimates derived from
-> typical 2 kW heater behaviour. Validate and tune them during the interfacing phase before
-> using it for live control.
+> `vevor_2kw` and `vevor_2kw_v2` are the same hardware with identical tuning
+> values; the profile differs only in the HEAT-mode policy (`heat_mode_manual`).
+> Keep one as a one-line revert target when experimenting with the other. Any
+> value that later proves wrong gets fixed in the preset (and can be
+> overridden per-deployment in YAML meanwhile — see Tuning Overrides below).
 
 ### Vevor protocol notes (interfacing phase)
 
@@ -117,6 +120,67 @@ The Vevor bus is **not** the classic BDAP protocol:
 
 > Note: the `type: pump` number entity's `min_value`/`max_value` in your YAML should match the
 > active profile's pump frequency range (jeabong_8kw: 1.3-5.5, vevor_2kw: 0.5-2.5).
+
+## Adding a New Heater (Heater N)
+
+The architecture is built so that heaters add as *data*, not code. The cost
+scales with how much of the hardware is new:
+
+### Same protocol, new model (e.g. a 5 kW Vevor)
+
+One file each, zero policy/thermostat changes:
+
+1. **`components/heater_uart/heater_profile.h`**
+   - one new `HeaterModel` enum entry;
+   - one preset factory `profile_xxx()` setting **every** field of
+     `HeaterProfile` (start from the nearest existing profile and change what
+     differs, the way `profile_vevor_2kw_v2()` does);
+   - one `case` in `profile_for()`.
+2. **`components/heater_uart/__init__.py`** — one line in the `cv.enum`
+   `heater_model:` mapping (key must match the YAML name exactly, lower-case).
+3. **`tests/test_profiles.cpp`** — add the model to `ALL_MODELS`; the existing
+   invariant tests then cover the new preset at `make -C tests` time.
+4. **This README** — one row in the heater table above.
+
+Then, per device YAML:
+
+```yaml
+uart:
+  baud_rate: <profile.uart_baud_rate>   # must match the profile
+  # pin inversion must match profile.uart_inverted (Vevor bus: true)
+heater_uart:
+  heater_model: <the new key>
+```
+
+No recompiles for bench tuning: the Phase-4 **Tuning Overrides** keys cover
+the preset, and `validate_profile_invariants()` reverts any override that
+would break a profile invariant. Once a value proves itself at the bench, it
+gets folded into the preset factory (and the README row).
+
+### New protocol (a bus we have not seen)
+
+Everything above, plus one driver — this is the only step that requires
+protocol knowledge:
+
+1. **`HeaterProtocol`**: one new enum value in `heater_profile.h`.
+2. **One driver class** implementing `HeaterProtocolDriver`
+   (`heater_protocol_driver.h`); follow `bdap_driver.h/.cpp` as the template
+   (`begin()`, `loop()`, `request_start()/request_stop()/pulse_stop()`,
+   `on_requested()`, `set_output()` taking `ControlInputs`, `telemetry()`,
+   run-state + error-code maps, checksums/echo/cadence all in the driver).
+   The policy layer speaks only the normalized 0.0-1.0 fuel domain via
+   `heater_output.h` — the new driver encodes that into whatever its protocol
+   says (Hz, level, duty — no policy changes).
+3. **Facade wiring**: one `case` in the driver switch in `heater_uart.cpp`
+   `setup()`, and the `.cpp` added to the `files` list in
+   `heater_uart.json`.
+4. **Host tests** (same commit): frame-layout goldens, TX state-machine
+   traces and RX decode rules using `tests/fake_stream.h` — the pattern in
+   `tests/test_bdap_driver.cpp` / `test_vevor_driver.cpp`.
+
+Everything else (thermostat, safety stack, room-sensor guard, entities,
+priming refusal policy) is protocol-agnostic and already runs the new
+profile.
 
 ## Auto Mode
 
@@ -248,7 +312,11 @@ Update your ESPHome configuration to include this component.
 
 ### Example Configuration
 
-This example shows a complete standalone mode configuration with full control capabilities:
+This example shows a complete standalone mode configuration with full control
+capabilities. The `uart:` block must match the selected profile - the BDAP
+example below uses 25000 baud on one half-duplex pin; for a Vevor model use
+`baud_rate: 4800` and the inverted-pin wiring described in the Vevor protocol
+notes:
 
 ```yaml
 external_components:
@@ -257,7 +325,7 @@ external_components:
 
 # Standalone mode uses single-wire half-duplex UART
 uart:
-  baud_rate: 25000
+  baud_rate: 25000  # jeabong_8kw: 25000 | vevor_2kw(_v2): 4800 (inverted pins)
   tx_pin: GPIO17  # Use same pin for TX and RX
   rx_pin: GPIO17
   id: uart_bus
@@ -266,7 +334,7 @@ uart:
 heater_uart:
   update_interval: 5s
   id: heater
-  heater_model: jeabong_8kw  # required - jeabong_8kw or vevor_2kw
+  heater_model: jeabong_8kw  # required - jeabong_8kw | vevor_2kw | vevor_2kw_v2
   operating_voltage: "12V"  # or "24V" depending on your heater
   altitude: 750  # meters above sea level
   auto_shutdown_overshoot: 0.0  # °C above target before shutdown (0.0 = at the setpoint)
@@ -349,7 +417,9 @@ button:
 ### Notes
 
 **General:**
-- The baud rate must be set to `25000` to communicate with the heater.
+- The UART baud rate and pin inversion must match the selected profile
+  (`profile_.uart_baud_rate` / `profile_.uart_inverted`): 25000 / normal for
+  the BDAP 8 kW, 4800 / inverted for the Vevor models.
 - Ensure the `rx_pin` and `tx_pin` match your ESP32 or ESP8266 configuration.
 
 **Standalone Mode:**
@@ -368,23 +438,35 @@ button:
 
 ### Code Structure
 
-**Core Component:**
-- **`heater_profile.h`**: Heater model profiles - all heater-specific tuning (pump Hz, fan RPM, HX thresholds, glow power) in one place.
-- **`heater_uart.h`**: Header file defining the component.
-- **`heater_uart.cpp`**: Core logic for UART communication, frame parsing, thermostat control, and sensor management. Reads all limits from the active profile.
-- **`__init__.py`**: Python module to integrate the component with ESPHome.
+**Core component** (`components/heater_uart/`):
+- **`heater_profile.h`**: all heater-specific tuning (pump Hz, fan RPM, HX
+  thresholds, glow power, temp range) as compiled presets + capability flags,
+  plus `validate_profile_invariants()` which reverts YAML overrides that
+  break a profile invariant.
+- **`heater_uart.cpp/h`**: the facade — entity registry/publishing, mode
+  intent, wiring policy results to the driver.
+- **`heater_policies.h/.cpp`**: pure, host-tested policies — `Thermostat`
+  (AUTO/HEAT state machine incl. mode entry and auto-restart),
+  `CombustionSafety` (HX safety stack, BDAP fan matching, cooldown monitor),
+  `RoomSensorGuard` (DHT22 physics guard: boot consensus, glitch, staleness).
+- **`heater_protocol_driver.h`**: the driver seam — `ByteStream`, `Telemetry`,
+  `ControlInputs`, shared run-state names.
+- **`bdap_driver.cpp/h`**: BDAP framing, cadence, echo discard, CRC-16,
+  frame build/parse, run-state and error maps.
+- **`vevor_driver.cpp/h`**: Vevor TX state machine, level encoding + ISA
+  altitude derate, RX decode, error map.
+- **`heater_output.h`**: the one fuel-domain conversion (normalized 0.0-1.0 ↔
+  Hz ↔ level), host-tested.
+- **`__init__.py`**: ESPHome schema incl. all Phase-4 tuning override keys.
 
-**Sensor Entities:**
-- **`sensor.py`**: Numeric sensor definitions (temperature, voltage, current, etc.).
-- **`text_sensor.py`**: Text sensor definitions (run state, error codes).
-- **`binary_sensor.py`**: Binary sensor definitions (on/off, auto-shutdown, standby states).
+**Sensor entities:** `sensor.py` (numeric: temperature, voltage, current,
+glow cluster), `text_sensor.py` (run state, error code),
+`binary_sensor.py` (on/off, auto-shutdown, standby, priming).
 
-**Control Entities:**
-- **`number.py`**: Number entity definitions (temperature and pump frequency control).
-- **`heater_number.h/cpp`**: Temperature number entity implementation.
-- **`heater_pump_number.h/cpp`**: Pump frequency number entity implementation.
-- **`select.py`**: Select entity definition (mode selection).
-- **`heater_select.h/cpp`**: Mode select entity implementation.
+**Control entities:** `number.py` (temperature, pump frequency, power level,
+fan probe), `select.py` (mode: Off/Auto/Heat), `button.py` (fuel priming,
+BDAP-only — the Vevor protocol has no prime command); their C++
+implementations are the `heater_*.cpp/h` files.
 
 ### Debugging
 

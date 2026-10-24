@@ -19,7 +19,8 @@ Status markers: **OPEN** (actionable) · **PARKED** (deliberately deferred) ·
    and flashed against real hardware.
 
 2. **PARKED — 8kW fan-RPM dial: real protocol field, no entity, policy undecided.**
-   The BDAP frame carries a genuine fan command (`build_tx_frame()` frame[7..10],
+   The BDAP frame carries a genuine fan command (`build_frame()` frame[7..10] in
+   `bdap_driver.cpp`; `build_tx_frame()` pre-refactor),
    min = max = fixed RPM) and the profile sets `has_fan_rpm_control = true`. What
    is missing is the safety policy, because the firmware currently *computes* the
    fan (scaled with the fuel rate in normal run, forced to ignition RPM during
@@ -58,7 +59,7 @@ Status markers: **OPEN** (actionable) · **PARKED** (deliberately deferred) ·
    hardware the flag is ignored with a warning. The room-sensor staleness gate
    and the ambient HEAT-mode limit are NOT part of the removable stack (owner
    requirements, 2026-10-20) and stay on everywhere. Implementation: Phase 3 of
-   ROADMAP.md — `HeaterUart::thermostat_control()` is now the `Thermostat` class
+   ROADMAP.md — `HeaterUart::thermostat_control()` became the `Thermostat` class
    (pure, host-tested in `tests/`).
 
 ---
@@ -216,6 +217,21 @@ Status markers: **OPEN** (actionable) · **PARKED** (deliberately deferred) ·
     a *consistent* bad value (e.g. stuck 0.0) passes consensus — sampling
     alone cannot distinguish it from a true value, and no cross-reference is
     available. Compile-verified (COMPILE_EXIT=0, flash 49.9%); pending flash.
+
+17. **IMPLEMENTED 2026-10-24 — multi-heater architecture refactor complete
+    (ROADMAP.md Phases 0-5, all device-verified).** Component layout changed
+    significantly: `heater_uart.cpp` is now a facade over `heater_policies.*`
+    (Thermostat / CombustionSafety / RoomSensorGuard, pure + host-tested) and
+    per-protocol drivers (`bdap_driver.*` / `vevor_driver.*` behind
+    `heater_protocol_driver.h`); the fuel-domain conversion is
+    `heater_output.h`; every heater tuning value is a profile preset with
+    per-key YAML overrides (`validate_profile_invariants()` reverts
+    invariant-breaking combos to the preset). Adding heater N is data, not
+    code — the "Adding a New Heater" checklist in the README is the contract.
+    Host tests: `make -C tests` (81 tests / 586 checks) + `tests/stub_check.sh`
+    run before every commit. Behaviour on the bench unit (vevor_2kw_v2) was
+    verified unchanged at every phase's flash. Old layout recoverable at the
+    `vevor_2kw` branch base and tag `lcd-injection-final` (LCD path).
 
 ---
 

@@ -20,21 +20,21 @@ EXISTING protocol = profile only; a NEW protocol = one new driver.
 
 | File | Purpose |
 |------|---------|
-| `heater_uart.cpp/h` | Facade: entity registry/publishing, mode intent, thermostat + safety policy, room-sensor guard, priming |
+| `heater_uart.cpp/h` | Facade: entity registry/publishing, mode intent, policy→driver wiring, priming (BDAP-only) |
 | `heater_protocol_driver.h` | Driver seam: ByteStream, Telemetry, ControlInputs, interface, shared run-state names |
-| `bdap_driver.cpp/h` | BDAP framing/cadence/echo/parse (+ fan matching, moves to SafetyPolicy at Phase 3) |
+| `bdap_driver.cpp/h` | BDAP framing/cadence/echo/parse, CRC-16; encodes `ControlInputs` (fan RPM arrives pre-computed from `CombustionSafety`) |
 | `vevor_driver.cpp/h` | Vevor framing, TX state machine, level encoding + altitude derate, RX decode, error map, fan probe |
-| `heater_policies.h/.cpp` | Controller policies: Thermostat (AUTO/HEAT state machine), CombustionSafety (HX overrides, BDAP fan, cooldown monitor), RoomSensorGuard (DHT22 physics guard) |
-| `heater_profile.h` | Per-model tuning presets + capability flags |
+| `heater_policies.h/.cpp` | Controller policies: Thermostat (AUTO/HEAT state machine incl. mode entry + auto-restart), CombustionSafety (HX overrides, BDAP fan, cooldown monitor), RoomSensorGuard (DHT22 physics guard) |
+| `heater_profile.h` | Per-model tuning presets + capability flags + `validate_profile_invariants()` (YAML-override repair) |
 | `heater_output.h` | The one fuel-domain conversion (normalized ↔ Hz ↔ level), host-tested |
 | `heater_log.h` | Log shim: ESP_LOG* on device, no-ops on host |
-| `__init__.py` | ESPHome schema, config validation |
+| `__init__.py` | ESPHome schema incl. the Phase-4 per-key tuning overrides |
 | `sensor.py` | Numeric sensors (temp, voltage, current, glow cluster) |
 | `text_sensor.py` | `run_state`, `error_code` human-readable |
 | `binary_sensor.py` | `on_off_state`, `auto_shutdown_active`, `standby_active`, `priming_active` |
 | `number.py` | Temperature + pump frequency + power level + fan probe controls |
 | `select.py` | Mode: Off/Auto/Heat |
-| `button.py` | Fuel priming button |
+| `button.py` | Fuel priming button (BDAP-only) |
 | `heater_*.cpp/h` | C++ implementations for number/select entities |
 
 Host tests: `tests/` (`make -C tests`, plain g++) pin frame layouts, the TX
@@ -47,7 +47,8 @@ state machines, decode rules and profile invariants - run before committing.
    parsed value is needed, decode in the owning driver's `parse_frame()`,
    publish in the facade's `update()`
 
-## FRAME LAYOUT (standalone mode, the only mode since the LCD injection path was removed 2026-10-24)
+## FRAME LAYOUT (the standalone path is the only one since the LCD injection
+path was removed 2026-10-24; recover via git tag `lcd-injection-final`)
 
 ```
 BDAP   TX 24B:  0x76 0x16 | cmd | temps | pump Hz | fan RPM | ... | CRC16
@@ -59,45 +60,21 @@ Vevor  RX 56/57B: 0xAA 0x77 | ... | level | HX (int16 x0.1C) | pump | fan | ... 
 Key byte positions defined in the owning driver's `parse_frame()`
 (`bdap_driver.cpp` / `vevor_driver.cpp`) and pinned by `tests/`.
 
-## THERMOSTAT (standalone_loop)
+## THERMOSTAT + SAFETY (`heater_policies.cpp`, pure + host-tested)
 
-- **AUTO mode**: Start → approach control → auto-shutdown → standby → restart
-- Parameters: `auto_shutdown_overshoot`, `auto_shutdown_hysteresis`, `approach_threshold`
-- **HEAT mode safety**: Ambient temperature limit (`ambient_heat_limit`) - forces shutdown if room > 26°C (configurable, range: -40 to 80°C)
-- **Fuel priming**: 60-second pump-only run for bleeding air from fuel lines (`start_priming()`/`stop_priming()`)
-- Safety: Heat exchanger temp limits, cooldown sequence
-
-## PUMP CONTROL
-
-- Range: 1.3-5.5 Hz (`PUMP_FREQ_MIN` to `PUMP_FREQ_MAX`)
-- Adjustment interval: 5s (`PUMP_ADJUST_INTERVAL_MS`)
-- HX temp target: 250°C (`HX_TEMP_TARGET`)
-
-## CONFIGURATION PARAMETERS
-
-| Parameter | Default | Range | Description |
-|-----------|---------|-------|-------------|
-| `auto_shutdown_overshoot` | 0.5°C | 0.0 - 3.0°C | Temp overshoot before auto-shutdown (AUTO mode) |
-| `auto_shutdown_hysteresis` | 1.5°C | 0.5 - 5.0°C | Temp drop before auto-restart (AUTO mode) |
-| `approach_threshold` | 1.0°C | 0.5 - 3.0°C | Start reducing pump when within this of target |
-| `ambient_heat_limit` | 26.0°C | -40 to 80°C | HEAT mode safety limit - force shutdown if room > X°C |
-
-## CONSTANTS
-
-| Constant | Value | Purpose |
-|----------|-------|---------|
-| `BAUD_RATE` | 25000 | Fixed by heater hardware |
-| `STANDALONE_TX_INTERVAL_MS` | 1000 | 1 Hz frame rate |
-| `STANDALONE_RX_TIMEOUT_MS` | 200 | RX response timeout |
-| `HX_TEMP_CRITICAL` | 265°C | Emergency shutdown (heat exchanger) |
-| `HX_TEMP_HIGH` | 255°C | Decrease pump (less fuel) |
-| `HX_TEMP_TARGET` | 250°C | Target heat exchanger temp |
-| `HX_TEMP_LOW` | 190°C | Increase pump (more fuel) |
-| `COOLDOWN_FAN_RPM` | 4000 | Cooldown fan speed |
-| `IGNITION_FAN_RPM` | 2000 | Fan speed during ignition (HX < 100°C) |
-| `PUMP_FREQ_MIN` | 1.3 Hz | Minimum pump frequency |
-| `PUMP_FREQ_MAX` | 5.5 Hz | Maximum pump frequency |
-| `PUMP_FREQ_INITIAL` | 1.8 Hz | Initial pump frequency for ignition |
-| `PUMP_FREQ_STEP` | 0.1 Hz | Pump adjustment step size |
-| `PUMP_ADJUST_INTERVAL_MS` | 5000 | 5s between pump adjustments |
-| `DEFAULT_ALTITUDE` | 750m | Default altitude (affects combustion) |
+- **AUTO mode**: start → approach control → auto-shutdown → standby → restart;
+  `Thermostat::enter_mode()` owns mode-entry decisions and shares
+  `standby_threshold()` with the periodic machine
+- Parameters: `auto_shutdown_overshoot`, `auto_shutdown_hysteresis`,
+  `approach_threshold` + the Phase-4 aggressiveness/cadence keys
+  (`Thermostat::Params`, YAML-overridable)
+- **HEAT mode**: modulating (8kW/vevor_2kw) or user-owned level (vevor_2kw_v2,
+  `heat_mode_manual`); ambient heat limit (`ambient_heat_limit`) forces
+  shutdown if room > limit in both cases
+- **CombustionSafety**: HX soot floor / too-hot / critical stop
+  (removable via `firmware_safety_oversight: false` on `ecm_owned_safety`
+  profiles ONLY), BDAP fan matching, cooldown monitor
+- **Fuel priming**: `start_priming()`/`stop_priming()`, BDAP-only (the Vevor
+  self-primes; the button refuses on it)
+- **RoomSensorGuard**: NaN/glitch rejection, boot 3-sample consensus,
+  staleness cutoff — not part of the removable safety stack

@@ -13,22 +13,32 @@ ESPHome external component for UART communication with diesel heaters (BDAP 24-b
 ```
 .
 ├── components/heater_uart/    # Main component (C++ + Python)
-│   ├── heater_uart.cpp/h      # Core class: frame parsing, control logic
-│   ├── heater_profile.h       # ALL heater-specific tuning (pump/fan/HX limits per model)
-│   ├── __init__.py            # ESPHome schema registration
+│   ├── heater_uart.cpp/h      # Facade: entities, mode intent, policy/driver wiring
+│   ├── heater_profile.h       # ALL heater-specific tuning (presets + capability flags)
+│   │                           #   + validate_profile_invariants() (YAML-override repair)
+│   ├── heater_protocol_driver.h  # Driver seam: ByteStream, Telemetry, ControlInputs
+│   ├── bdap_driver.cpp/h      # BDAP protocol (0x76/0x16 @ 25000, CRC-16)
+│   ├── vevor_driver.cpp/h     # Vevor protocol (0xAA/0x66/0x77 @ 4800, level encode + derate)
+│   ├── heater_policies.cpp/h  # Pure policies: Thermostat, CombustionSafety, RoomSensorGuard
+│   ├── heater_output.h        # The one fuel-domain conversion (0.0-1.0 ↔ Hz ↔ level)
+│   ├── heater_log.h           # Log shim (ESP_LOG* on device, no-ops on host tests)
+│   ├── __init__.py            # ESPHome schema incl. Phase-4 tuning override keys
 │   ├── sensor.py              # 9 numeric sensors
 │   ├── text_sensor.py         # 2 text sensors (run_state, error_code)
 │   ├── binary_sensor.py       # 4 binary sensors
-│   ├── number.py              # Temperature + pump frequency control
+│   ├── number.py              # Temperature + pump frequency + power level + fan probe
 │   ├── select.py              # Mode selection (Off/Auto/Heat)
-│   ├── button.py              # Fuel priming button
+│   ├── button.py              # Fuel priming button (BDAP-only)
 │   ├── heater_number.cpp/h    # Temperature number entity
 │   ├── heater_pump_number.cpp/h  # Pump frequency number entity
 │   ├── heater_select.cpp/h    # Mode select entity
 │   ├── fuel_prime_button.h    # Fuel prime button entity
-│   └── heater_uart.json       # ESPHome component manifest
+│   └── heater_uart.json       # ESPHome component manifest (must list every .cpp)
+├── tests/                     # Host-side test harness (make -C tests, plain g++)
+├── ROADMAP.md                 # Refactor decisions + phase status
+├── ISSUES.md                  # Open/parked/decided items with evidence
 ├── @notes/bluetoothheater-master/  # Reference implementation (read-only)
-└── README.md
+└── README.md                  # User docs incl. the "Adding a New Heater" checklist
 ```
 
 ## WHERE TO LOOK
@@ -72,7 +82,9 @@ ESPHome external component for UART communication with diesel heaters (BDAP 24-b
 - Thermostat policy constants (aggressiveness, cadence) live in `Thermostat::Params` defaults — YAML-overridable, never hardcoded in the .cpp
 - Control logic (`heater_policies.cpp`, `heater_uart.cpp`, entities) reads exclusively from `profile_.*` / `params.*` — never hardcoded values
 - `heater_model:` is REQUIRED in YAML — the profile is never implicit
-- `vevor_2kw` profile is PROVISIONAL until bench-validated (interfacing phase)
+- `vevor_2kw_v2` is the in-production profile (lab device); `vevor_2kw` shares
+  its tuning values and differs only in the HEAT-mode policy (kept as the
+  one-line revert target); open Vevor tuning items live in ISSUES.md #5-10
 
 **UART Protocol:**
 - Standalone-only since 2026-10-24 (LCD injection path removed; tag `lcd-injection-final`)
@@ -118,29 +130,42 @@ heater_uart:
 
 **Adding New Sensors:**
 1. Add the sensor definition to `sensor.py` (name, unit, icon)
-2. Add the parsed-value member variable in `heater_uart.h`
-3. Parse it in `parse_rx_frame()` (BDAP) and/or `parse_vevor_rx_frame()` (Vevor)
-4. Publish it in `update()`
+2. Add the value to `Telemetry` in `heater_protocol_driver.h`
+3. Decode it in the owning driver's `parse_frame()` (BDAP and/or Vevor)
+4. Publish it in the facade's `update()`
 
 **Adding New Control Entities:**
 1. Create a Python schema file (`number.py`/`select.py`/`button.py` etc.)
 2. Create the C++ entity class following the `HeaterNumber` pattern (`.h`/`.cpp`)
 3. Add a setter in `heater_uart.h` and register the entity schema in the platform module
 
+**Adding a New Heater (see README "Adding a New Heater"):**
+- Same protocol: one `HeaterModel` enum entry + preset factory + `profile_for()`
+  case in `heater_profile.h`, one `cv.enum` line in `__init__.py`, one row in the
+  README table, the model added to `ALL_MODELS` in `tests/test_profiles.cpp`
+- New protocol: additionally one `HeaterProtocolDriver` implementation (+
+  `heater_uart.json` files entry + host framing/decode tests, same commit)
+
 **Modifying Frame Parsing:**
-- BDAP: `parse_rx_frame()` - 0x76/0x16 24-byte frames @ 25000 baud
-- Vevor: `parse_vevor_rx_frame()` - 0xAA/0x77 56-byte frames @ 4800 baud (additive checksum)
+- BDAP: `bdap_driver.cpp:parse_frame()` - 0x76/0x16 24-byte frames @ 25000 baud
+- Vevor: `vevor_driver.cpp:parse_frame()` - 0xAA/0x77 56/57-byte frames @ 4800 baud (additive checksum)
 - Multi-byte values are big-endian: `(high << 8) | low`. Vevor HX temp is a **signed** int16 × 0.1 °C
 - Vevor link-layer details: `@notes/vevor-protocol.md`
 
 **Modifying Thermostat/Safety Logic:**
-- Everything lives in `thermostat_control()` (shared by both protocols) and is driven
-  by the profile; pump Hz ↔ power level conversion happens only at the Vevor TX boundary
+- Everything lives in `heater_policies.{h,cpp}` (`Thermostat` / `CombustionSafety` /
+  `RoomSensorGuard`), is driven by the profile + `Thermostat::Params` (YAML-tunable),
+  and is host-tested in `tests/test_policies.cpp`; pump Hz ↔ power level conversion
+  happens only at the driver boundary (`heater_output.h`)
 
 ## COMMANDS
 
 ```bash
-# Validate config
+# Host tests - run before every commit (plain g++, no ESPHome needed)
+make -C tests
+tests/stub_check.sh   # from the repo root: syntax-checks every component TU
+
+# Validate config (owner runs the device builds)
 esphome compile config.yaml
 
 # Debug logging
