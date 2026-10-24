@@ -72,8 +72,8 @@ Status markers: **OPEN** (actionable) · **PARKED** (deliberately deferred) ·
    unit-less as "unverified". Verified live on the bench: during ignition glow
    a/b/c read 99/92/83 with current 11.0 A, all four returning to 0 when the glow
    extinguished; while running, fan voltage read 11.0 V at 3692 RPM.
-   Evidence: 649-frame full cycle (`scratch/vevor-cycle-full.log`), incl. the
-   disproof of byte 13 (0 through the whole glow-preheat phase; 78-128 while
+   Evidence: 649-frame full cycle capture (the raw log is no longer retained),
+   incl. the disproof of byte 13 (0 through the whole glow-preheat phase; 78-128 while
    running with the glow off; only ever {0,78,88,98,108,118,128} — a 10-step
    ladder, and it drifts in the off state with fan 0 and HX flat, i.e. it moves
    with no load → internal/self-measured quantity).
@@ -130,8 +130,8 @@ Status markers: **OPEN** (actionable) · **PARKED** (deliberately deferred) ·
    A frozen level→kW curve is worthless across seasons (intake air density, room
    ΔT). The durable path is a closed loop on HX temperature plus a live density
    correction using intake-air temperature and baro — the same σ formula already
-   used for altitude. Related: the standing `TODO` line (BME280 for automatic
-   altitude) is the sensor half of this.
+   used for altitude. The BME280 automatic-altitude upgrade (this item's sensor
+   half) is the standing follow-up.
 
 11. **OPEN — hardcoded API key in `lab-heater-butler.yaml`, public repo.**
     The ESPHome API encryption key is inline; the repo is public. Pre-existing
