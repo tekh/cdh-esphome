@@ -195,6 +195,13 @@ class HeaterUart : public PollingComponent, public uart::UARTDevice, public Byte
    float ambient_heat_limit_ = AMBIENT_HEAT_LIMIT; // Configurable limit for HEAT mode shutdown
    HeaterMode heater_mode_ = HeaterMode::OFF;
 
+  // Frame-independent off-state recheck cadence (see loop()): the Vevor ECM
+  // stops answering status polls once it is fully off, so on_fresh_frame() -
+  // and with it Thermostat::control() - goes silent while idle. The
+  // standby/auto-restart recheck is therefore driven off this timer (1 Hz,
+  // matching the driver cadence) instead of the RX frame.
+  uint32_t last_off_recheck_time_ = 0;
+
   // Protocol driver (owns framing, cadence, echo, checksums, decode).
   // Selected by profile_.protocol in setup().
   std::unique_ptr<HeaterProtocolDriver> driver_;

@@ -114,6 +114,21 @@ void HeaterUart::loop() {
 
     if (driver_->loop(now)) {
         on_fresh_frame(params);
+    } else if (heater_mode_ == HeaterMode::AUTO && !driver_->telemetry().on) {
+        // Frame-independent off-state recheck. The Vevor ECM stops answering
+        // status polls once it is fully off, so on_fresh_frame() (and with it
+        // Thermostat::control()) can stay silent for tens of minutes - starving
+        // the auto-restart/standby check. Run that check on its own 1 Hz timer so
+        // a cooling room, or a raised setpoint, still starts the heater. Safe:
+        // when idle these two checks are the only off-state decisions control()
+        // would have made, and they are no-ops while the heater is running.
+        if (now - last_off_recheck_time_ >= 1000) {
+            last_off_recheck_time_ = now;
+            const Thermostat::Result r = thermostat_.recheck_off_state(
+                driver_->telemetry(), room_sensor_.value(), desired_temp_setting_,
+                heater_mode_, params, now);
+            if (r.request_start) driver_->request_start();
+        }
     }
 }
 
@@ -219,6 +234,12 @@ void HeaterUart::update() {
             binary_sensor->publish_state(thermostat_.in_standby());
         else if (key == "priming_active")
             binary_sensor->publish_state(is_priming_);
+        else if (key == "temperature_probe_failed")
+            // True when the room probe has produced no accepted reading for
+            // >10 min - i.e. the guard is blind. This is exactly the condition
+            // that suppresses AUTO restarts (the stale gate), so when the heater
+            // sits off and will not come back, this sensor says why.
+            binary_sensor->publish_state(is_room_sensor_stale());
     }
 
     // Sync temperature number with actual desired temperature

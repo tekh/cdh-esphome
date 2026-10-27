@@ -220,6 +220,15 @@ When using standalone mode with the mode select set to "Auto", the component pro
 4. **Standby Monitoring**: While off, the component continuously monitors room temperature
 5. **Auto-Restart**: When temperature drops below the restart threshold, the heater automatically starts again
 
+> **Frame-independent off-state recheck (2026-10-27).** Steps 4-5 run on their own
+> 1 Hz timer in `loop()`, not only on a fresh RX frame. A powered-down Vevor ECM
+> stops answering status polls, which starved the frame-driven control loop: with
+> the heater off, `Thermostat::control()` never ran, so the auto-restart check
+> never fired and the heater stayed off through a cold room or a raised setpoint
+> (field: room 18.7 °C vs target 21.0 °C, off for 38 min, all telemetry mirrors
+> frozen while the DHT22 was fresh). Log line to expect: `Auto-restart: room …`
+> (or `Standby->Start: …`).
+
 ### Configuration Parameters
 
 Fine-tune the Auto mode behavior with these parameters:
@@ -296,6 +305,14 @@ standby during the fault and resumes normal thermostat behaviour once the
 sensor recovers. Since 2026-10-21 the timer is refreshed only by readings
 that pass the glitch guard below, so a sensor that is dead *or* stuck
 emitting garbage is declared blind.
+
+This condition is also exposed as `binary_sensor.<device>_temperature_probe_failed`
+(device class `problem`, 2026-10-27): ON while the guard is blind **or** has no
+baseline yet — the first ~30 s after boot, until the 3-sample consensus above
+locks — and OFF once a fresh reading is accepted. It answers "why is the heater
+sitting off?" at a glance, because this is exactly the condition that suppresses
+AUTO restarts. A probe dead from boot stays ON, so a never-working sensor stays
+visible rather than silently disabling the heater.
 
 ### Room-sensor glitch guard (standalone mode)
 

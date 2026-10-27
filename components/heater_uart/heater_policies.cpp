@@ -116,18 +116,13 @@ Thermostat::Result Thermostat::control(const Telemetry &tlm, float room_temp, fl
         return out;  // block standby/auto-restart/auto-shutdown until fresh readings
     }
 
-    // === STANDBY CHECK (AUTO mode) ===
-    // If in standby, check if temperature has dropped enough to start
-    if (in_standby_ && mode == HeaterMode::AUTO) {
-        float threshold = standby_threshold(target_temp, params);
-        if (room_temp < threshold) {
-            HEATER_LOGI(TAG, "Standby->Start: room %.1f°C < %.1f°C threshold", room_temp, threshold);
-            out.request_start = true;
-            pump_freq_setting_ = profile.pump_freq_initial;
-            last_pump_adjust_time_ = now;
-            in_standby_ = false;
-        }
-    }
+    // === OFF-STATE RECHECK (standby->start + auto-restart) ===
+    // Shared with the facade's frame-independent 1 Hz recheck
+    // (Thermostat::recheck_off_state) so the two can never drift apart. Both
+    // checks are no-ops while the heater is running (in_standby_ and
+    // in_auto_shutdown_ are only ever set while it is off).
+    const Result off_state = recheck_off_state(tlm, room_temp, target_temp, mode, params, now);
+    if (off_state.request_start) out.request_start = true;
 
     // Thermostat and safety logic
     // During early ignition (states 1-3) and shutdown (states 6-8), the heater's internal
@@ -346,19 +341,49 @@ Thermostat::Result Thermostat::control(const Telemetry &tlm, float room_temp, fl
         }
     }
 
-    // === AUTO-RESTART LOGIC (AUTO mode only) ===
-    // Check if heater should auto-restart from auto-shutdown state
-    // This runs when heater is off and was auto-shutdown (not manual off)
-    if (!tlm.on && in_auto_shutdown_ && mode == HeaterMode::AUTO) {
-        float restart_threshold = standby_threshold(target_temp, params);
+    out.pump_request_hz = pump_freq_setting_;
+    return out;
+}
 
-        if (room_temp < restart_threshold) {
+Thermostat::Result Thermostat::recheck_off_state(const Telemetry &tlm, float room_temp,
+                                                 float target_temp, HeaterMode mode,
+                                                 const Params &params, uint32_t now) {
+    Result out;
+    const HeaterProfile &profile = *profile_;
+
+    // No blind starts: mirror control()'s health gate. The facade calls this on
+    // a timer (bypassing control()'s own gate), so the guard has to live here
+    // too - a stale room sensor suppresses every off-state start.
+    if (params.external_sensor_present && params.sensor_stale) {
+        out.pump_request_hz = pump_freq_setting_;
+        return out;
+    }
+
+    const float threshold = standby_threshold(target_temp, params);
+
+    // AUTO-RESTART (was auto-shutdown): heater off, room fell below the re-engage
+    // threshold. This is the check that a setpoint change (or a cooling room)
+    // must be able to reach while the Vevor bus is silent.
+    if (!tlm.on && in_auto_shutdown_ && mode == HeaterMode::AUTO) {
+        if (room_temp < threshold) {
             HEATER_LOGI(TAG, "Auto-restart: room %.1f°C < target %.1f°C - %.1f°C hysteresis",
                         room_temp, target_temp, params.auto_shutdown_hysteresis);
             out.request_start = true;
             pump_freq_setting_ = profile.pump_freq_initial;
             last_pump_adjust_time_ = now;
             in_auto_shutdown_ = false;
+        }
+    }
+
+    // STANDBY -> START: parked in standby (e.g. entered AUTO too warm), room now
+    // below the threshold.
+    if (in_standby_ && mode == HeaterMode::AUTO) {
+        if (room_temp < threshold) {
+            HEATER_LOGI(TAG, "Standby->Start: room %.1f°C < %.1f°C threshold", room_temp, threshold);
+            out.request_start = true;
+            pump_freq_setting_ = profile.pump_freq_initial;
+            last_pump_adjust_time_ = now;
+            in_standby_ = false;
         }
     }
 

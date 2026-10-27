@@ -1,7 +1,7 @@
 import esphome.codegen as cg
 import esphome.config_validation as cv
 from esphome.components import binary_sensor
-from esphome.const import DEVICE_CLASS_POWER
+from esphome.const import DEVICE_CLASS_POWER, DEVICE_CLASS_PROBLEM
 
 from . import heater_uart_ns, HeaterUart
 
@@ -12,6 +12,10 @@ BINARY_SENSORS = {
     "auto_shutdown_active": ("Auto Shutdown Active", DEVICE_CLASS_POWER),
     "standby_active": ("Standby Active", DEVICE_CLASS_POWER),
     "priming_active": ("Priming Active", DEVICE_CLASS_POWER),
+    # Room-probe health: ON when the DHT22 has produced no accepted reading for
+    # >10 min (the guard is blind). That is the exact condition that suppresses
+    # AUTO restarts, so it explains an off heater that will not come back.
+    "temperature_probe_failed": ("Temperature Probe Failed", DEVICE_CLASS_PROBLEM),
 }
 
 CONFIG_SCHEMA = cv.Schema(

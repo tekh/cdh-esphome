@@ -114,6 +114,17 @@ class Thermostat {
   void set_standby(bool s) { in_standby_ = s; }
   void set_auto_shutdown(bool s) { in_auto_shutdown_ = s; }
 
+  // Off-state recheck: with the heater off in AUTO mode, is it time to start?
+  // Runs the two checks that own the "off in AUTO" state - the standby check
+  // and the auto-restart check - so a caller can force an immediate
+  // re-evaluation instead of waiting for the next fresh frame (control() itself
+  // calls this, and the facade calls it on a 1 Hz timer because the Vevor ECM
+  // stops answering polls once it is fully off, starving on_fresh_frame()).
+  // Shares standby_threshold() with control() so the two cannot drift. Honours
+  // the same stale-sensor no-blind-start gate. Only request_start can be set.
+  Result recheck_off_state(const Telemetry &tlm, float room_temp, float target_temp,
+                           HeaterMode mode, const Params &params, uint32_t now);
+
  protected:
   // The single re-engage threshold (standby->start and auto-restart both
   // compare against it - v1 used the same formula in three places).

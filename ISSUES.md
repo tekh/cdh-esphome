@@ -238,6 +238,31 @@ Status markers: **OPEN** (actionable) · **PARKED** (deliberately deferred) ·
     verified unchanged at every phase's flash. Old layout recoverable at the
     `vevor_2kw` branch base and tag `lcd-injection-final` (LCD path).
 
+18. **DEPLOYED 2026-10-27 — AUTO would not restart while the Vevor bus was silent
+    (frame-starved off-state recheck).**
+    Field symptom: heater in AUTO, auto-shutdown active, room 18.7 C, target 21.0 C,
+    hysteresis 1.0 -> restart threshold 20.0 C. The room sat 1.3 C below the
+    threshold and the heater never started, including after raising the setpoint.
+    Diagnosis: every telemetry mirror (fan_speed, fan_voltage, HX temp, run_state,
+    supply_voltage) had been frozen for ~38 min while the DHT22 updated every
+    ~1 min. The Vevor ECM stops answering status polls once fully off, so
+    `driver_->loop()` never returned a fresh frame, `on_fresh_frame()` /
+    `Thermostat::control()` never ran, and the auto-restart check never executed.
+    The room-sensor guard was healthy — this was NOT a DHT22 fault.
+    Fix: the standby->start and auto-restart checks were factored into
+    `Thermostat::recheck_off_state()` (shared with `control()`, same
+    `standby_threshold()`, same no-blind-start gate) and `loop()` now runs it on
+    its own 1 Hz timer while off in AUTO, independent of RX frames, so a cooling
+    room or a raised setpoint starts the heater within ~1 s.
+    **New entity:** `binary_sensor.<device>_temperature_probe_failed` (device
+    class `problem`) — ON when the room probe is blind (no accepted reading for
+    >10 min) or still establishing its boot baseline (~30 s after reboot), the
+    exact condition that suppresses AUTO restarts. Boot-time ON flips to OFF once
+    the 3-sample consensus locks (confirmed live on the device). Host tests:
+    86 tests / 597 checks (5 new recheck tests), `stub_check.sh` clean,
+    `esphome config` valid. Deployed 2026-10-27 (md5-verified copy to hoas;
+    owner compiled, flashed and confirmed the probe sensor and restart work).
+
 ---
 
 ## Reference

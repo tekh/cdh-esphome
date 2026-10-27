@@ -244,6 +244,12 @@ binary_sensor:
       web_server:
         sorting_group_id: sorting_group_sensors
 
+    temperature_probe_failed:
+      name: "Temperature Probe Failed"
+      id: temperature_probe_failed
+      web_server:
+        sorting_group_id: sorting_group_sensors
+
 button:
   - platform: heater_uart
     name: "Fuel Prime"

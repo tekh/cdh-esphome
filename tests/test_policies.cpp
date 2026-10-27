@@ -657,3 +657,82 @@ TEST(overshoot_within_interval_gate_blocks_shutdown) {
   const auto r = t.control(running_tlm(200), 19.4f, 19.0f, HeaterMode::AUTO, params, 6000);
   CHECK(r.request_stop == false);  // interval not elapsed
 }
+
+// --- Thermostat: frame-independent off-state recheck ---------------------
+// The Vevor ECM stops answering status polls once fully off, so control() is
+// never fed a fresh frame while idle and its auto-restart/standby checks are
+// starved. recheck_off_state() is the same decision, callable without a frame.
+
+TEST(recheck_auto_restarts_from_auto_shutdown) {
+  // Live scenario: AUTO, auto-shutdown active (heater off), bus silent. Room
+  // 18.7 vs target 21.0 with hysteresis 1.0 -> threshold 20.0 -> must start.
+  const HeaterProfile p = jeabong_profile();
+  Thermostat t;
+  t.begin(p);
+  t.set_auto_shutdown(true);  // auto-shutdown fired earlier
+  Telemetry off;
+  off.run_state = 0;
+  off.on = false;
+  off.hx_temp = 60.0f;
+  const auto r = t.recheck_off_state(off, 18.7f, 21.0f, HeaterMode::AUTO, params_for(p), 6000);
+  CHECK(r.request_start == true);
+  CHECK_NEAR(r.pump_request_hz, 1.8f, 1e-4);  // ignition rate
+  CHECK(t.in_auto_shutdown() == false);
+}
+
+TEST(recheck_no_start_when_room_above_threshold) {
+  const HeaterProfile p = jeabong_profile();
+  Thermostat t;
+  t.begin(p);
+  t.set_auto_shutdown(true);
+  Telemetry off;
+  off.on = false;
+  off.hx_temp = 60.0f;
+  // room 20.5 >= threshold 20.0 -> still waiting
+  const auto r = t.recheck_off_state(off, 20.5f, 21.0f, HeaterMode::AUTO, params_for(p), 6000);
+  CHECK(r.request_start == false);
+  CHECK(t.in_auto_shutdown() == true);
+}
+
+TEST(recheck_stale_sensor_blocks_blind_start) {
+  // The timer calls this directly, bypassing control()'s gate, so recheck must
+  // enforce the no-blind-start rule itself.
+  const HeaterProfile p = jeabong_profile();
+  Thermostat t;
+  t.begin(p);
+  t.set_auto_shutdown(true);
+  Telemetry off;
+  off.on = false;
+  off.hx_temp = 60.0f;
+  auto params = params_for(p);
+  params.external_sensor_present = true;
+  params.sensor_stale = true;
+  const auto r = t.recheck_off_state(off, 10.0f, 21.0f, HeaterMode::AUTO, params, 6000);
+  CHECK(r.request_start == false);  // no blind start
+  CHECK(t.in_auto_shutdown() == true);
+}
+
+TEST(recheck_starts_from_standby_when_cold) {
+  const HeaterProfile p = jeabong_profile();
+  Thermostat t;
+  t.begin(p);
+  t.set_standby(true);  // entered AUTO too warm
+  Telemetry off;
+  off.on = false;
+  off.hx_temp = 60.0f;
+  const auto r = t.recheck_off_state(off, 17.0f, 19.0f, HeaterMode::AUTO, params_for(p), 6000);
+  CHECK(r.request_start == true);
+  CHECK(t.in_standby() == false);
+}
+
+TEST(recheck_noop_outside_auto_mode) {
+  const HeaterProfile p = jeabong_profile();
+  Thermostat t;
+  t.begin(p);
+  t.set_auto_shutdown(true);
+  Telemetry off;
+  off.on = false;
+  off.hx_temp = 60.0f;
+  CHECK(t.recheck_off_state(off, 10.0f, 21.0f, HeaterMode::ON, params_for(p), 6000).request_start == false);
+  CHECK(t.recheck_off_state(off, 10.0f, 21.0f, HeaterMode::OFF, params_for(p), 6000).request_start == false);
+}
