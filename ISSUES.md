@@ -101,26 +101,29 @@ Status markers: **OPEN** (actionable) · **PARKED** (deliberately deferred) ·
     All three keys are YAML-overridable for A/B; `validate_profile_invariants()`
     reverts out-of-range values to the preset. Host tests 95 / 633,
     `stub_check.sh` clean.
-    **Cold-start caveat (same day, after the 2.0-preset reflash):** two starts on a
-    cold plug (ECM's own HX reading 39-42 °C) both ran the glow and aborted with
-    the pump never moving — 63 s then 37 s, glow drawing 4-6 A vs 3 A in the
-    passing run, `err=0` throughout. The wire was at level 08 both times, so the
-    gate was not the cause: the ECM never asked for fuel. The shrinking window
-    (63 s -> 37 s) looks like its failed-attempt counter. The level-8 PASS above
-    was therefore obtained on a *warm* plug following prior attempts and does NOT
-    yet hold for a genuine cold start — 2.0 Hz is the bottom of the working band
-    and may be too low when cold. Next steps: retry after a power cycle; if it
-    stalls again, raise `pump_freq_glow` to 2.25 Hz (level 9) — YAML only.
-    **Open:** (a) the glow relights during cooldown on **every** stop observed
-    (3/3: user stop 08:xx, level-8 cycle end 13:44, shutdown 14:19) at 4-7 A for
-    ~30-40 s — routine post-glow burn-off, most likely, not a fault (err=0 every
-    time); (b) the gate holds the floor in cooldown, so IF that relight were a
-    re-ignition attempt it would be starved — but three cooldowns at the floor
-    produced no E-code and no re-light of the burner, so it is not driving
-    combustion; (c) the benched A/B is one warm and one warm-ish start; the
-    pre-glow behaviour is driven by the requested level, not by HX temperature, so
-    the gate's effect should not differ cold — worth one confirmation start, not a
-    test matrix.
+    **Final configuration (2026-11-09 evening):** the glow stage is set to the FULL
+    request — `pump_freq_glow: 2.5` (= `pump_freq_max`, level 10) in the hoas YAML.
+    With that value stage 2 never bites, so the effective design is **two-stage**:
+    floor while the glow is OFF (the defect window), full request from the moment the
+    glow lights. Stage 2 remains configurable and host-tested; the repo preset still
+    carries 2.0. Full run log: `@notes/ignition-gate-2026-11-09.md`.
+    **The lockout trap (cost most of the afternoon):** after repeated failed
+    ignitions the ECM latches — it runs the glow, never drives the pump, and the
+    abort window shrinks each attempt (63 s -> 37 s -> ~26 s), with `err=0` the whole
+    time. It refuses fuel even at level 10 on the wire. **Only a full 12 V power
+    cycle clears it**; rebooting the ESP32 does not. Verified: after a heater+ESP
+    power cycle (RX showed V=0.0 / HX=0 at boot) the same firmware and the same
+    frames dosed 1.5 Hz at 70 s into the glow and lit cleanly, no white smoke.
+    Hypotheses this killed: hot-HX start guard (fails identically at 39-42 °C and
+    59 °C), supply sag (rail held 13.0-13.3 V under full burn after the cycle), and
+    "the gate breaks dosing" (TX bytes identical in passing and failing runs; the
+    ECM ACKed power=10 and still refused). Our component cannot clear an ECM
+    lockout — bench discipline is: few attempts, then cut 12 V.
+    **Open:** (a) the glow relights during cooldown on **every** stop observed at
+    4-7 A for ~30-40 s — routine post-glow burn-off, not a fault (err=0 every time);
+    (b) whether the ECM re-engages on its own after parking at the end of a burn, or
+    needs a fresh start command — under 24 h soak from 2026-11-09; (c) if the soak is
+    clean, fold 2.5 into the repo preset so the YAML override is redundant.
 
 5. **FIXED 2026-10-12 — the parser no longer decodes byte 13.** It now decodes the
    slots the capture proved: **byte 15 → `fan_voltage`**, **byte 27 → glow current**

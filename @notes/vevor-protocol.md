@@ -366,13 +366,21 @@ All three keys are YAML-overridable (`pump_freq_pre_ignition`, `pump_freq_glow`,
 `gate_fuel_before_ignition`) for A/B without a recompile; out-of-range values
 revert to the preset in `validate_profile_invariants()`.
 
-Open: at level 8 the ECM burned ~35 s, then went to cooldown and parked in
-standby (err=0); the glow relits during every cooldown observed. **Cold start is
-not yet proven:** two post-reflash cold starts (ECM HX 39-42 °C) ran the glow and
-aborted without ever dosing — 63 s and 37 s, glow 4-6 A vs 3 A on the passing
-run, `err=0`, wire at level 08 the whole time. Level 8 (2.0 Hz) is the bottom of
-the working band; if a cold start stalls again, raise `pump_freq_glow` to 2.25 Hz
-(level 9).
+Final configuration (2026-11-09): `pump_freq_pre_ignition = 0.5 Hz` (level 1) and
+`pump_freq_glow = 2.5 Hz` (level 10). With the glow stage at max the clamp never
+bites, so the effective gate is **two-stage**: floor while the glow is off, full
+request from the moment it lights. Benched: pre-glow pump 0.0 Hz, dosing 1.5 Hz at
+~70 s into the glow, clean ignition, no white smoke.
+
+**The ECM latches after failed ignitions.** After a few failed starts it runs the
+glow, never drives the pump, and shortens its abort window each attempt (63 s ->
+37 s -> ~26 s), with `err=0` throughout — it refuses fuel even at level 10 on the
+wire. Only a full 12 V power cycle clears it; rebooting the ESP32 does not. When a
+bench session shows "glow runs, pump 0.0 Hz, abort", cut heater power first and
+retry before changing anything in firmware.
+
+Also observed: the ECM burns ~35 s and then enters cooldown on its own, and the glow
+relights during every cooldown (4-7 A, 30-40 s) — routine, no E-code.
 
 ## Deploy path (lab-heater)
 
