@@ -101,15 +101,16 @@ Status markers: **OPEN** (actionable) · **PARKED** (deliberately deferred) ·
     All three keys are YAML-overridable for A/B; `validate_profile_invariants()`
     reverts out-of-range values to the preset. Host tests 95 / 633,
     `stub_check.sh` clean.
-    **Open:** (a) during the level-8 cycle the ECM burned ~35 s and then entered
-    cooldown on its own (err=0) and the glow relit at 7.0 A during the purge —
-    whether that relight is residue burn-off or a re-ignition attempt is
-    unverified; (b) the gate holds the floor in cooldown, so a cooldown relight
-    that is actually a re-ignition would be starved — needs wire evidence with
-    the pump watched through cooldown; (c) the benched A/B is one warm and one
-    warm-ish start; the pre-glow behaviour is driven by the requested level, not
-    by HX temperature, so the gate's effect should not differ cold — worth one
-    confirmation start, not a test matrix.
+    **Open:** (a) the glow relights during cooldown on **every** stop observed
+    (3/3: user stop 08:xx, level-8 cycle end 13:44, shutdown 14:19) at 4-7 A for
+    ~30-40 s — routine post-glow burn-off, most likely, not a fault (err=0 every
+    time); (b) the gate holds the floor in cooldown, so IF that relight were a
+    re-ignition attempt it would be starved — but three cooldowns at the floor
+    produced no E-code and no re-light of the burner, so it is not driving
+    combustion; (c) the benched A/B is one warm and one warm-ish start; the
+    pre-glow behaviour is driven by the requested level, not by HX temperature, so
+    the gate's effect should not differ cold — worth one confirmation start, not a
+    test matrix.
 
 5. **FIXED 2026-10-12 — the parser no longer decodes byte 13.** It now decodes the
    slots the capture proved: **byte 15 → `fan_voltage`**, **byte 27 → glow current**
