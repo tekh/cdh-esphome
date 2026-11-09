@@ -158,7 +158,7 @@ TEST(validation_reverts_glow_outside_range) {
   p.pump_freq_glow = 99.0f;  // outside 0.5-2.5
   const auto r = validate_profile_invariants(p, profile_for(HeaterModel::VEVOR_2KW));
   CHECK(r.pump_range_reverted == true);
-  CHECK_NEAR(p.pump_freq_glow, 2.5f, 1e-6);
+  CHECK_NEAR(p.pump_freq_glow, 2.0f, 1e-6);
 }
 
 TEST(validation_reverts_broken_hx_chain) {

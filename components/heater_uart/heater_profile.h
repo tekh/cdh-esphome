@@ -177,17 +177,21 @@ inline HeaterProfile profile_vevor_2kw() {
   p.pump_freq_initial = 1.0f;
   p.pump_prime_freq = 2.5f;
   // The ECM doses its own pre-flame fuel phases from the requested level.
-  // Bench 2026-11-09 (XMZ-D2): clamp the floor (level 1) while the glow is OFF -
-  // that is the actual defect window, and a level-1 request makes the ECM dose
-  // 0.0 Hz. Once the glow is LIT the ECM must get the FULL request: level 1/3
-  // there starves it (pump 0.0 Hz, start aborted ~50 s), level 8 is marginal
-  // (lit once, then refused fuel in three consecutive attempts), and level 10 is
-  // what it wants (1.5-2.4 Hz from ~70 s into the glow, clean ignition).
-  // So the glow stage is set to max = pass-through: effectively a two-stage gate.
+  // Bench 2026-11-09 (XMZ-D2), two separate findings:
+  //  1. Pre-glow (glow OFF): clamp to the floor (level 1). A level-1 request makes
+  //     the ECM dose 0.0 Hz - this is what fixed the original defect (fuel going
+  //     in before the glow plug ever ran).
+  //  2. Glow phase (glow LIT, pre-flame): the ECM doses 1.5 Hz from ~70 s into the
+  //     glow and then RAMPS up while it waits for the flame. Level 3 starves it
+  //     (pump 0.0 Hz, abort ~50 s). Level 10 lets the ramp run to 2.6 Hz, which on
+  //     a cold start (glow 12 A, 190 s to light) put ~2 min of fuel into the
+  //     chamber -> thick white smoke before ignition. Level 8 (2.0 Hz) doses
+  //     1.5 Hz and lit cleanly with no smoke, so the glow stage is capped there.
   // Note: after repeated failed starts the ECM latches and refuses fuel at ANY
-  // level until it is power-cycled at 12 V (see ISSUES #19).
+  // level until power-cycled at 12 V (ISSUES #19) - do not read a no-dose abort as
+  // a level problem until the unit has been power-cycled.
   p.pump_freq_pre_ignition = p.pump_freq_min;
-  p.pump_freq_glow = p.pump_freq_max;
+  p.pump_freq_glow = 2.0f;
   p.gate_fuel_before_ignition = true;
   // 2 kW: smaller blower wheel, lower airflow
   p.fan_rpm_min = 900;

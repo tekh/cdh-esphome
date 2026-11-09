@@ -101,12 +101,22 @@ Status markers: **OPEN** (actionable) · **PARKED** (deliberately deferred) ·
     All three keys are YAML-overridable for A/B; `validate_profile_invariants()`
     reverts out-of-range values to the preset. Host tests 95 / 633,
     `stub_check.sh` clean.
-    **Final configuration (2026-11-09 evening):** the glow stage is set to the FULL
-    request — `pump_freq_glow: 2.5` (= `pump_freq_max`, level 10) in the hoas YAML.
-    With that value stage 2 never bites, so the effective design is **two-stage**:
-    floor while the glow is OFF (the defect window), full request from the moment the
-    glow lights. Stage 2 remains configurable and host-tested; the repo preset still
-    carries 2.0. Full run log: `@notes/ignition-gate-2026-11-09.md`.
+    **Final configuration (2026-11-09 late evening):** `pump_freq_glow = 2.0` (level 8)
+    in both the preset and the hoas YAML. Two findings sit behind the two knobs: the
+    pre-glow floor (level 1) kills the original defect, and the glow-phase cap (level
+    8) bounds the ECM's ramp while a cold chamber refuses to light. Level 10 was tried
+    and produced **~1 min of thick white smoke** on a cold start (17:38: glow 12 A,
+    dosing from +70 s, pump ramped 1.5 -> 2.6 Hz, flame only at +190 s — HA history in
+    `@notes/ignition-gate-2026-11-09.md` §3b); the pre-glow window was clean in that
+    run, so only the glow phase was over-fuelling. Level 3 or below starves it (pump
+    0.0 Hz, abort ~50 s). The earlier "level 8 refuses to dose" conclusion came from
+    lockout-contaminated runs and is withdrawn.
+    **Open:** (a) the glow relights during cooldown on **every** stop observed at
+    4-7 A for ~30-40 s — routine post-glow burn-off, not a fault (err=0 every time);
+    (b) whether the ECM re-engages on its own after parking at the end of a burn, or
+    needs a fresh start command — under 24 h soak from 2026-11-09; (c) whether level 8
+    caps the cold-start smoke in practice — needs one cold start on the flashed 2.0
+    build.
     **The lockout trap (cost most of the afternoon):** after repeated failed
     ignitions the ECM latches — it runs the glow, never drives the pump, and the
     abort window shrinks each attempt (63 s -> 37 s -> ~26 s), with `err=0` the whole
@@ -119,11 +129,6 @@ Status markers: **OPEN** (actionable) · **PARKED** (deliberately deferred) ·
     "the gate breaks dosing" (TX bytes identical in passing and failing runs; the
     ECM ACKed power=10 and still refused). Our component cannot clear an ECM
     lockout — bench discipline is: few attempts, then cut 12 V.
-    **Open:** (a) the glow relights during cooldown on **every** stop observed at
-    4-7 A for ~30-40 s — routine post-glow burn-off, not a fault (err=0 every time);
-    (b) whether the ECM re-engages on its own after parking at the end of a burn, or
-    needs a fresh start command — under 24 h soak from 2026-11-09; (c) if the soak is
-    clean, fold 2.5 into the repo preset so the YAML override is redundant.
 
 5. **FIXED 2026-10-12 — the parser no longer decodes byte 13.** It now decodes the
    slots the capture proved: **byte 15 → `fan_voltage`**, **byte 27 → glow current**

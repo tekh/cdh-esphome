@@ -64,15 +64,14 @@ return min(requested_hz, profile.pump_freq_pre_ignition);   // glow off: the def
 | key | value | effect |
 |---|---|---|
 | `gate_fuel_before_ignition` | true | Vevor profiles only |
-| `pump_freq_pre_ignition` | 0.5 Hz (level 1) | **the actual fix** — ECM doses 0.0 Hz |
-| `pump_freq_glow` | **2.5 Hz (level 10)** via YAML | full request once the glow is lit |
+| `pump_freq_pre_ignition` | 0.5 Hz (level 1) | **the fix for the original defect** — ECM doses 0.0 Hz |
+| `pump_freq_glow` | **2.0 Hz (level 8)** | caps the ECM's glow-phase ramp; level 10 produced thick white smoke on a cold start |
 
-Important: with `pump_freq_glow = 2.5` the glow stage is a **no-op** — the clamp
-never bites because the thermostat never asks for more than max. The effective
-design is therefore **two-stage**: floor while the glow is off, full request from the
-moment the glow is lit. The three-stage machinery stays (it is configurable and
-host-tested) but the benched production value makes stage 2 pass-through. The repo
-preset still says 2.0; the hoas YAML override says 2.5.
+Two findings, two knobs. The pre-glow floor kills fuel before the glow plug. The
+glow-phase cap limits how much the ECM ramps while it waits for a cold chamber to
+light — at level 10 the ECM walked the pump 1.5 -> 2.6 Hz over ~2 min and smoked
+badly; at level 8 it dosed 1.5 Hz and lit cleanly. Level 3 or below starves it
+entirely (pump 0.0 Hz, abort ~50 s).
 
 ---
 
@@ -145,6 +144,32 @@ The ECM doses **nothing** from a level-3 request. Flooring the glow phase starve
 15:03:31  state 5 Running; thermostat ramps 10 -> 9 -> 8 -> 7 -> 6
 15:04      HX 120, fan 3716, V 12.4-13.3, no white smoke (owner)
 ```
+
+---
+
+## 3b. 17:38 cold start at level 10 — thick white smoke (why the glow stage is capped at 8)
+
+Owner restarted a genuinely cold unit; ~1 min of thick white cloud before it lit.
+HA history for that start:
+
+```
+17:38:41  Glow Plug Pre-heat
+17:38:51  state 4, glow 3 A -> 12 A            <- cold plug (warm starts: 3-6 A)
+17:40:01  pump 0.0 -> 1.5 Hz                   <- 70 s into glow, normal cadence
+17:41:26  pump ramps 1.5 -> 2.6 Hz             <- ECM ramping while no flame
+17:42:01  glow OFF (flame lights)              <- ~2 min of fuel in the chamber
+17:43:16  Running
+```
+
+The pre-glow window was clean (pump 0.0 Hz the whole time), so the original defect
+is fixed. The smoke comes from the ECM's glow-phase ramp at full request: it starts
+dosing 70 s in and keeps ramping while a cold chamber refuses to light, so ~2 minutes
+of fuel accumulates and burns off as white smoke once it catches.
+
+Level 8 caps that ramp (dosed 1.5 Hz, lit cleanly twice). Level 10 is too much on a
+cold start. Note the earlier "level 8 refuses to dose" conclusion came from runs
+taken while the ECM was locked out — that data was invalid, and it had pushed the
+tuning to level 10 in the first place.
 
 ---
 

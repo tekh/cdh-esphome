@@ -366,11 +366,13 @@ All three keys are YAML-overridable (`pump_freq_pre_ignition`, `pump_freq_glow`,
 `gate_fuel_before_ignition`) for A/B without a recompile; out-of-range values
 revert to the preset in `validate_profile_invariants()`.
 
-Final configuration (2026-11-09): `pump_freq_pre_ignition = 0.5 Hz` (level 1) and
-`pump_freq_glow = 2.5 Hz` (level 10). With the glow stage at max the clamp never
-bites, so the effective gate is **two-stage**: floor while the glow is off, full
-request from the moment it lights. Benched: pre-glow pump 0.0 Hz, dosing 1.5 Hz at
-~70 s into the glow, clean ignition, no white smoke.
+Final configuration (2026-11-09 late evening): `pump_freq_pre_ignition = 0.5 Hz`
+(level 1) and `pump_freq_glow = 2.0 Hz` (level 8), in both the preset and the hoas
+YAML. The floor kills the original defect (level-1 request -> ECM doses 0.0 Hz); the
+glow cap bounds the ECM's ramp while a cold chamber refuses to light. Level 10 was
+tried and produced ~1 min of thick white smoke on a cold start (glow 12 A, dosing
+from +70 s, pump 1.5 -> 2.6 Hz, flame at +190 s) while the pre-glow window stayed
+clean — so only the glow phase was over-fuelling. Level 3 or below starves it.
 
 **The ECM latches after failed ignitions.** After a few failed starts it runs the
 glow, never drives the pump, and shortens its abort window each attempt (63 s ->
