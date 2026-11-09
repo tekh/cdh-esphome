@@ -259,6 +259,7 @@ with a warning** — a typo can never silently disable a safety net.
 | Group | Keys | Unit |
 |---|---|---|
 | Fuel pump | `pump_freq_min`, `pump_freq_max`, `pump_freq_step`, `pump_freq_initial`, `pump_prime_freq` | Hz |
+| Ignition fuel gate | `gate_fuel_before_ignition`, `pump_freq_pre_ignition`, `pump_freq_glow` | bool / Hz |
 | Combustion fan (BDAP) | `fan_rpm_min`, `fan_rpm_max`, `ignition_fan_rpm`, `cooldown_fan_rpm`, `ignition_hx_threshold` | RPM / °C |
 | Heat exchanger | `hx_temp_low`, `hx_temp_target`, `hx_temp_high`, `hx_temp_critical`, `cooldown_target_temp` | °C |
 | Frame constants | `fan_sensor`, `glow_power` | protocol byte |

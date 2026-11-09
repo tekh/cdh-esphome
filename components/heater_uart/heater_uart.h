@@ -71,6 +71,11 @@ class HeaterUart : public PollingComponent, public uart::UARTDevice, public Byte
   void set_pump_freq_step(float v) { profile_.pump_freq_step = v; }
   void set_pump_freq_initial(float v) { profile_.pump_freq_initial = v; }
   void set_pump_prime_freq(float v) { profile_.pump_prime_freq = v; }
+  void set_pump_freq_pre_ignition(float v) { profile_.pump_freq_pre_ignition = v; }
+  void set_pump_freq_glow(float v) { profile_.pump_freq_glow = v; }
+  // Exposed (unlike the other policy flags) because it changes start behaviour
+  // and the bench needs an on/off A/B without a recompile.
+  void set_gate_fuel_before_ignition(bool v) { profile_.gate_fuel_before_ignition = v; }
   void set_fan_rpm_min(uint16_t v) { profile_.fan_rpm_min = v; }
   void set_fan_rpm_max(uint16_t v) { profile_.fan_rpm_max = v; }
   void set_ignition_fan_rpm(uint16_t v) { profile_.ignition_fan_rpm = v; }

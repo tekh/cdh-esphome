@@ -38,6 +38,46 @@ enum class HeaterMode : uint8_t {
   ON = 2     // Force heater on, bypass thermostat (safety limits still apply)
 };
 
+// === Ignition fuel gate (ECM-owned start sequences) =========================
+// Some ECMs (Vevor-class) dose their own pre-flame fuel phases from the
+// requested power level. Bench 2026-11-09 (XMZ-D2): two phases precede the
+// flame - pre-glow (glow off) and the glow phase (glow lit, fuel accumulating,
+// HX flat; the ECM's raw state 2, misleadingly named "Ignited" in the
+// reference table). Full power there floods the chamber (white smoke), and
+// the gate's first version released at raw state 2, leaving the glow-phase
+// flood in place. So with the gate armed the wire request is held at:
+//   - `pump_freq_pre_ignition` (floor) while the glow is OFF,
+//   - `pump_freq_glow` (mid) while the glow is LIT, pre-flame - the mid must
+//     not be the floor: the ECM doses from the request (level 1 -> pump
+//     0.0 Hz), so flooring the glow phase starves the flame (E10);
+// and it is released when the glow goes OUT (flame confirmed - the glow
+// cluster bytes hit zero at the same 1 s frame the HX starts rising at
+// combustion rate) or when the heater reports RUNNING.
+// Profile-gated: BDAP-class heaters sequence glow+fuel themselves and leave
+// the flag false (pure passthrough there, host-pinned).
+//
+// `start_requested` = "the controller intends to run" (driver start intent or
+// heater on). Without it, idle status polls keep their normal request, so a
+// parked heater's frames are unchanged.
+// `glow_lit` = glow cluster (current or a/b/c) non-zero - the Vevor's
+// ignition-confirmation signal; zero on BDAP and the gate is off there.
+// Pure + host-tested (tests/test_policies.cpp).
+inline float apply_ignition_fuel_gate(float requested_hz, uint8_t run_state,
+                                      bool start_requested, bool glow_lit,
+                                      const HeaterProfile &profile) {
+  if (!profile.gate_fuel_before_ignition || !start_requested) return requested_hz;
+  if (run_state == RUN_STATE_RUNNING) return requested_hz;
+  if (run_state == RUN_STATE_IGNITED) {
+    // Raw state 2: glow lit, flame not yet confirmed.
+    if (!glow_lit) return requested_hz;  // glow out = flame established
+    return requested_hz < profile.pump_freq_glow ? requested_hz : profile.pump_freq_glow;
+  }
+  // Glow off (states 0/1): the ECM's pre-glow dosing follows the request -
+  // hold it at the floor.
+  return requested_hz < profile.pump_freq_pre_ignition ? requested_hz
+                                                       : profile.pump_freq_pre_ignition;
+}
+
 // === Thermostat (control policy) ============================================
 
 class Thermostat {

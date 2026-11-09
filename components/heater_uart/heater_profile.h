@@ -44,6 +44,25 @@ struct HeaterProfile {
   float pump_freq_initial;  // ignition start rate
   float pump_prime_freq;    // rate used during fuel priming (pump-only)
 
+  // --- ignition fuel gate (ECM-owned start sequences) ---
+  // Some ECMs (Vevor-class) dose their own pre-flame fuel phases from the
+  // requested power level. Bench 2026-11-09 (XMZ-D2): two dosing phases
+  // precede the flame - pre-glow (glow OFF, ECM raw state 1) and the glow
+  // phase (glow LIT, fuel accumulating, HX flat - raw state 2, misleadingly
+  // named "Ignited" in the reference state table). Full power there floods
+  // the chamber (visible white smoke). With the gate armed the wire request
+  // is held at:
+  //   `pump_freq_pre_ignition` (floor) while the glow is off,
+  //   `pump_freq_glow` (mid) while the glow is lit, pre-flame,
+  // then released when the glow goes OUT (glow cluster bytes zero = flame
+  // established - the HX starts rising at combustion rate at that instant)
+  // or the heater reports RUNNING. BDAP-class profiles leave this false:
+  // there the firmware sequences glow+fuel itself (state 2 glow, state 4
+  // fuel ramp) and the gate is a pure passthrough.
+  float pump_freq_pre_ignition;   // gated wire request while glow is off
+  float pump_freq_glow;           // gated wire request while glow is lit, pre-flame
+  bool gate_fuel_before_ignition; // arm the gate for this heater
+
   // --- combustion fan, RPM ---
   uint16_t fan_rpm_min;          // fan speed at minimum pump rate
   uint16_t fan_rpm_max;          // fan speed at maximum pump rate
@@ -109,6 +128,9 @@ inline HeaterProfile profile_jeabong_8kw() {
   p.pump_freq_step = 0.1f;
   p.pump_freq_initial = 1.8f;
   p.pump_prime_freq = 5.0f;
+  p.pump_freq_pre_ignition = p.pump_freq_initial;
+  p.pump_freq_glow = p.pump_freq_initial;  // unused: gate flag false below
+  p.gate_fuel_before_ignition = false;  // BDAP: firmware sequences ignition itself
   p.fan_rpm_min = 1450;
   p.fan_rpm_max = 4500;
   p.ignition_fan_rpm = 2000;
@@ -154,6 +176,17 @@ inline HeaterProfile profile_vevor_2kw() {
   p.pump_freq_step = 0.1f;
   p.pump_freq_initial = 1.0f;
   p.pump_prime_freq = 2.5f;
+  // The ECM doses its own pre-flame fuel phases from the requested level.
+  // Bench 2026-11-09 (XMZ-D2): floor (level 1) while the glow is off, then a
+  // mid rate while the glow is lit pre-flame. Measured dosing from the request:
+  // level 1/3 -> 0.0 Hz (ECM aborts the start ~50 s, no flame), level 8
+  // (2.0 Hz) -> 1.5 Hz dosing from ~70 s into the glow phase, clean ignition,
+  // level 10 -> 1.5-2.4 Hz (the old pre-flame flood + white smoke). 2.0 is the
+  // lowest benched working point; A/B-tunable via pump_freq_glow. Full power
+  // only once the glow goes out (flame established).
+  p.pump_freq_pre_ignition = p.pump_freq_min;
+  p.pump_freq_glow = 2.0f;
+  p.gate_fuel_before_ignition = true;
   // 2 kW: smaller blower wheel, lower airflow
   p.fan_rpm_min = 900;
   p.fan_rpm_max = 3000;
@@ -244,6 +277,14 @@ inline ProfileValidationReport validate_profile_invariants(HeaterProfile &p,
   }
   if (!(p.pump_freq_initial >= p.pump_freq_min && p.pump_freq_initial <= p.pump_freq_max)) {
     p.pump_freq_initial = preset.pump_freq_initial;
+    r.pump_range_reverted = true;
+  }
+  if (!(p.pump_freq_pre_ignition >= p.pump_freq_min && p.pump_freq_pre_ignition <= p.pump_freq_max)) {
+    p.pump_freq_pre_ignition = preset.pump_freq_pre_ignition;
+    r.pump_range_reverted = true;
+  }
+  if (!(p.pump_freq_glow >= p.pump_freq_min && p.pump_freq_glow <= p.pump_freq_max)) {
+    p.pump_freq_glow = preset.pump_freq_glow;
     r.pump_range_reverted = true;
   }
 

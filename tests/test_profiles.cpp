@@ -29,7 +29,20 @@ TEST(profile_pump_range_is_sane) {
     CHECK(p.pump_freq_initial <= p.pump_freq_max);
     CHECK(p.pump_prime_freq >= p.pump_freq_min);
     CHECK(p.pump_prime_freq <= p.pump_freq_max);
+    CHECK(p.pump_freq_pre_ignition >= p.pump_freq_min);
+    CHECK(p.pump_freq_pre_ignition <= p.pump_freq_max);
+    CHECK(p.pump_freq_glow >= p.pump_freq_min);
+    CHECK(p.pump_freq_glow <= p.pump_freq_max);
   }
+}
+
+TEST(profile_ecm_profiles_gate_ignition) {
+  // Vevor-class ECMs dose their own pre-glow pump from the requested level, so
+  // the ignition fuel gate must be armed there; BDAP/8kW firmware sequences
+  // glow+fuel itself and must keep its own behaviour.
+  CHECK(profile_for(HeaterModel::JEABONG_8KW).gate_fuel_before_ignition == false);
+  CHECK(profile_for(HeaterModel::VEVOR_2KW).gate_fuel_before_ignition == true);
+  CHECK(profile_for(HeaterModel::VEVOR_2KW_V2).gate_fuel_before_ignition == true);
 }
 
 TEST(profile_hx_thresholds_are_ordered) {
@@ -87,6 +100,9 @@ TEST(profile_v2_differs_from_v1_only_in_policy) {
   CHECK(v1.pump_freq_max == v2.pump_freq_max);
   CHECK(v1.pump_freq_step == v2.pump_freq_step);
   CHECK(v1.pump_freq_initial == v2.pump_freq_initial);
+  CHECK(v1.pump_freq_pre_ignition == v2.pump_freq_pre_ignition);
+  CHECK(v1.pump_freq_glow == v2.pump_freq_glow);
+  CHECK(v1.gate_fuel_before_ignition == v2.gate_fuel_before_ignition);
   CHECK(v1.hx_temp_low == v2.hx_temp_low);
   CHECK(v1.hx_temp_critical == v2.hx_temp_critical);
   CHECK(v1.temp_min == v2.temp_min);
@@ -127,6 +143,22 @@ TEST(validation_reverts_initial_outside_range) {
   const auto r = validate_profile_invariants(p, profile_for(HeaterModel::JEABONG_8KW));
   CHECK(r.pump_range_reverted == true);
   CHECK_NEAR(p.pump_freq_initial, 1.8f, 1e-6);
+}
+
+TEST(validation_reverts_pre_ignition_outside_range) {
+  HeaterProfile p = copy(HeaterModel::VEVOR_2KW);
+  p.pump_freq_pre_ignition = 99.0f;  // outside 0.5-2.5
+  const auto r = validate_profile_invariants(p, profile_for(HeaterModel::VEVOR_2KW));
+  CHECK(r.pump_range_reverted == true);
+  CHECK_NEAR(p.pump_freq_pre_ignition, 0.5f, 1e-6);
+}
+
+TEST(validation_reverts_glow_outside_range) {
+  HeaterProfile p = copy(HeaterModel::VEVOR_2KW);
+  p.pump_freq_glow = 99.0f;  // outside 0.5-2.5
+  const auto r = validate_profile_invariants(p, profile_for(HeaterModel::VEVOR_2KW));
+  CHECK(r.pump_range_reverted == true);
+  CHECK_NEAR(p.pump_freq_glow, 2.0f, 1e-6);
 }
 
 TEST(validation_reverts_broken_hx_chain) {

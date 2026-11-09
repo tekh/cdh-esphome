@@ -28,6 +28,9 @@ CONF_PUMP_FREQ_MAX = "pump_freq_max"
 CONF_PUMP_FREQ_STEP = "pump_freq_step"
 CONF_PUMP_FREQ_INITIAL = "pump_freq_initial"
 CONF_PUMP_PRIME_FREQ = "pump_prime_freq"
+CONF_PUMP_FREQ_PRE_IGNITION = "pump_freq_pre_ignition"
+CONF_PUMP_FREQ_GLOW = "pump_freq_glow"
+CONF_GATE_FUEL_BEFORE_IGNITION = "gate_fuel_before_ignition"
 CONF_FAN_RPM_MIN = "fan_rpm_min"
 CONF_FAN_RPM_MAX = "fan_rpm_max"
 CONF_IGNITION_FAN_RPM = "ignition_fan_rpm"
@@ -89,6 +92,9 @@ CONFIG_SCHEMA = cv.Schema(
         cv.Optional(CONF_PUMP_FREQ_STEP): cv.float_range(min=0.01, max=1.0),
         cv.Optional(CONF_PUMP_FREQ_INITIAL): cv.float_range(min=0.0, max=10.0),
         cv.Optional(CONF_PUMP_PRIME_FREQ): cv.float_range(min=0.0, max=10.0),
+        cv.Optional(CONF_PUMP_FREQ_PRE_IGNITION): cv.float_range(min=0.0, max=10.0),
+        cv.Optional(CONF_PUMP_FREQ_GLOW): cv.float_range(min=0.0, max=10.0),
+        cv.Optional(CONF_GATE_FUEL_BEFORE_IGNITION): cv.boolean,
         cv.Optional(CONF_FAN_RPM_MIN): cv.int_range(min=0, max=65000),
         cv.Optional(CONF_FAN_RPM_MAX): cv.int_range(min=0, max=65000),
         cv.Optional(CONF_IGNITION_FAN_RPM): cv.int_range(min=0, max=65000),
@@ -150,6 +156,9 @@ async def to_code(config):
         (CONF_PUMP_FREQ_STEP, "set_pump_freq_step"),
         (CONF_PUMP_FREQ_INITIAL, "set_pump_freq_initial"),
         (CONF_PUMP_PRIME_FREQ, "set_pump_prime_freq"),
+        (CONF_PUMP_FREQ_PRE_IGNITION, "set_pump_freq_pre_ignition"),
+        (CONF_PUMP_FREQ_GLOW, "set_pump_freq_glow"),
+        (CONF_GATE_FUEL_BEFORE_IGNITION, "set_gate_fuel_before_ignition"),
         (CONF_FAN_RPM_MIN, "set_fan_rpm_min"),
         (CONF_FAN_RPM_MAX, "set_fan_rpm_max"),
         (CONF_IGNITION_FAN_RPM, "set_ignition_fan_rpm"),

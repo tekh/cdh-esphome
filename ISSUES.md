@@ -66,6 +66,46 @@ Status markers: **OPEN** (actionable) · **PARKED** (deliberately deferred) ·
 
 ## 2kW / vevor_2kw + vevor_2kw_v2 (XMZ-D2) — OPEN
 
+19. **FIXED 2026-11-09 (bench-verified) — pre-flame fuel gate for ECM-owned start
+    sequences.** Field symptom: the 2kW put far too much fuel into the combustion
+    chamber before the flame (visible white smoke), then aborted silently. Cause: the
+    XMZ-D2's ECM runs its own pre-flame fuel phases and doses them **from the
+    requested power level** — v2 HEAT entry seats `pump_freq_max` (level 10), carried
+    in the START frame **and** every 1 Hz status poll.
+    Two dosing phases precede the flame: pre-glow (glow OFF, ECM raw state 1) and the
+    glow phase (glow LIT, fuel accumulating, HX flat — ECM raw state 2, which the
+    reference state table mislabels "Ignited"; on this unit state 2 is held *through*
+    the flame, so it is not a release signal). First attempt released at state 2 and
+    left the glow-phase flood in place; the bench proved the mid phase matters.
+    Measured on the wire (bench 2026-11-09, warm starts, HX ~40 °C boot):
+    | requested | ECM dosed | result |
+    |---|---|---|
+    | level 1 (0.5 Hz) | 0.0 Hz | gate floor |
+    | level 3 (1.0 Hz) | 0.0 Hz | **abort ~50 s, no flame, err=0 (silent)** |
+    | level 8 (2.0 Hz) | 1.5 Hz from ~70 s into glow | **clean ignition, no E-codes** |
+    | level 10 (2.5 Hz) | 1.5–2.4 Hz | the original pre-flame flood |
+    Fix: `apply_ignition_fuel_gate()` (`heater_policies.h`, called from
+    `HeaterUart::loop()` at the driver boundary) holds the wire request at
+      - `pump_freq_pre_ignition` (floor, 0.5 Hz) while the glow is OFF,
+      - `pump_freq_glow` (mid, benched 2.0 Hz = level 8) while the glow is LIT, pre-flame,
+    and releases to the thermostat request when the glow goes OUT (glow cluster bytes
+    24-27 -> 0, the actual flame-established signal) or the heater reports `RUNNING`.
+    Vevor presets: pre-ignition = `pump_freq_min`, glow = 2.0 Hz, flag
+    `gate_fuel_before_ignition = true`. `jeabong_8kw` keeps the flag false — BDAP
+    firmware sequences glow (state 2) then fuel (state 4) itself, so its frames stay
+    byte-identical (host-pinned: `ignition_gate_off_profile_passthrough`). Idle polls
+    are unaffected (no start intent). All three keys are YAML-overridable for A/B;
+    `validate_profile_invariants()` reverts out-of-range values to the preset.
+    Host tests 95 / 633, `stub_check.sh` clean.
+    Evidence: `/tmp/vevor-coldstart-b5.log` (level 3, FAIL) and `-b6.log` (level 8,
+    PASS). **Open:** (a) at level 8 the ECM ran one ~35 s burn, then went to cooldown
+    and parked in standby (err=0); the glow relit during cooldown (possibly burning
+    off rich residue — unverified), and whether/how it re-engages on its own is not
+    established; (b) the gate holds the floor in cooldown, so if a cooldown relight is
+    a re-ignition attempt it may be starved — needs wire evidence; (c) level 8 on a
+    true cold start is untested (under-priming risk is worse cold, so 2.0 Hz is the
+    floor of the working band, not its middle).
+
 5. **FIXED 2026-10-12 — the parser no longer decodes byte 13.** It now decodes the
    slots the capture proved: **byte 15 → `fan_voltage`**, **byte 27 → glow current**
    (candidate), and **bytes 24-26 → `glow_a`/`glow_b`/`glow_c`** published raw and

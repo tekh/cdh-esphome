@@ -6,7 +6,7 @@
 # SafetyPolicy, ControlPolicy, room-sensor guard), their test files join here.
 
 CXX ?= g++
-CXXFLAGS ?= -std=c++17 -Wall -Wextra -Werror -g
+CXXFLAGS ?= -std=c++17 -Wall -Wextra -Werror -g -MMD -MP
 INCLUDES := -I../components/heater_uart
 
 TEST_SRCS := $(wildcard test_*.cpp)
@@ -54,4 +54,9 @@ heater_policies.o: ../components/heater_uart/heater_policies.cpp \
 	$(CXX) $(CXXFLAGS) $(INCLUDES) -c $< -o $@
 
 clean:
-	rm -f *.o test_run
+	rm -f *.o *.d test_run
+
+# Header dependencies (-MMD): a changed profile/policy header must rebuild the
+# test TUs too - a stale .o that still uses an old struct layout silently
+# invalidates every profile/policy check.
+-include $(TEST_OBJS:.o=.d) $(DRIVER_OBJS:.o=.d)

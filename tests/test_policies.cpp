@@ -10,11 +10,15 @@ using esphome::heater_uart::CombustionSafety;
 using esphome::heater_uart::HeaterMode;
 using esphome::heater_uart::HeaterProfile;
 using esphome::heater_uart::RoomSensorGuard;
+using esphome::heater_uart::RUN_STATE_FAILED_IGNITION;
+using esphome::heater_uart::RUN_STATE_GLOW_PREHEAT;
 using esphome::heater_uart::RUN_STATE_IGNITED;
+using esphome::heater_uart::RUN_STATE_OFF;
 using esphome::heater_uart::RUN_STATE_RUNNING;
 using esphome::heater_uart::RUN_STATE_START_ACK;
 using esphome::heater_uart::Telemetry;
 using esphome::heater_uart::Thermostat;
+using esphome::heater_uart::apply_ignition_fuel_gate;
 
 static HeaterProfile jeabong_profile() {
   HeaterProfile p{};
@@ -26,6 +30,9 @@ static HeaterProfile jeabong_profile() {
   p.pump_freq_step = 0.1f;
   p.pump_freq_initial = 1.8f;
   p.pump_prime_freq = 5.0f;
+  p.pump_freq_pre_ignition = p.pump_freq_initial;
+  p.pump_freq_glow = p.pump_freq_initial;
+  p.gate_fuel_before_ignition = false;
   p.fan_rpm_min = 1450;
   p.fan_rpm_max = 4500;
   p.ignition_fan_rpm = 2000;
@@ -48,6 +55,9 @@ static HeaterProfile vevor_v2_profile() {
   p.pump_freq_max = 2.5f;
   p.pump_freq_initial = 1.0f;
   p.pump_prime_freq = 2.5f;
+  p.pump_freq_pre_ignition = p.pump_freq_min;
+  p.pump_freq_glow = 2.0f;
+  p.gate_fuel_before_ignition = true;
   p.fan_rpm_min = 900;
   p.fan_rpm_max = 3000;
   p.ignition_fan_rpm = 1400;
@@ -76,6 +86,60 @@ static Thermostat::Params params_for(const HeaterProfile &profile) {
   params.auto_shutdown_hysteresis = 1.0f;
   params.heat_mode_manual = profile.heat_mode_manual;
   return params;
+}
+
+// --- Ignition fuel gate (ECM-owned pre-glow dosing) ---
+
+TEST(ignition_gate_off_profile_passthrough) {
+  const HeaterProfile p = jeabong_profile();  // BDAP: gate flag false
+  CHECK_NEAR(apply_ignition_fuel_gate(5.5f, RUN_STATE_START_ACK, true, false, p), 5.5f, 1e-6);
+  CHECK_NEAR(apply_ignition_fuel_gate(5.5f, RUN_STATE_GLOW_PREHEAT, true, true, p), 5.5f, 1e-6);
+  CHECK_NEAR(apply_ignition_fuel_gate(5.5f, RUN_STATE_IGNITED, true, true, p), 5.5f, 1e-6);
+}
+
+TEST(ignition_gate_holds_floor_while_glow_off) {
+  const HeaterProfile p = vevor_v2_profile();
+  const uint8_t gated[] = {RUN_STATE_OFF, RUN_STATE_START_ACK, RUN_STATE_GLOW_PREHEAT,
+                           RUN_STATE_FAILED_IGNITION};
+  for (const uint8_t s : gated) {
+    // full-power request (HEAT mode entry) is clamped to the floor
+    CHECK_NEAR(apply_ignition_fuel_gate(p.pump_freq_max, s, true, false, p), p.pump_freq_min, 1e-6);
+  }
+}
+
+TEST(ignition_gate_holds_glow_rate_while_glow_lit) {
+  const HeaterProfile p = vevor_v2_profile();
+  // raw state 2 ("Ignited" per the reference table) is the glow phase: glow
+  // lit, flame not yet confirmed. Hold at pump_freq_glow - not the floor
+  // (the ECM doses from the request; flooring starves the flame -> E10) and
+  // not the full request (flood).
+  CHECK_NEAR(apply_ignition_fuel_gate(p.pump_freq_max, RUN_STATE_IGNITED, true, true, p),
+             p.pump_freq_glow, 1e-6);
+}
+
+TEST(ignition_gate_releases_on_glow_out_and_running) {
+  const HeaterProfile p = vevor_v2_profile();
+  // glow out (cluster -> 0) = flame established: release, even in raw state 2
+  CHECK_NEAR(apply_ignition_fuel_gate(p.pump_freq_max, RUN_STATE_IGNITED, true, false, p),
+             p.pump_freq_max, 1e-6);
+  // running: release regardless of the glow cluster
+  CHECK_NEAR(apply_ignition_fuel_gate(p.pump_freq_max, RUN_STATE_RUNNING, true, true, p),
+             p.pump_freq_max, 1e-6);
+  CHECK_NEAR(apply_ignition_fuel_gate(p.pump_freq_max, RUN_STATE_RUNNING, true, false, p),
+             p.pump_freq_max, 1e-6);
+}
+
+TEST(ignition_gate_leaves_idle_polls_alone) {
+  const HeaterProfile p = vevor_v2_profile();
+  // no start intent: a parked heater's status polls keep their normal request,
+  // even with the glow cluster lit (the ECM re-lights it during cooldown)
+  CHECK_NEAR(apply_ignition_fuel_gate(1.0f, RUN_STATE_OFF, false, true, p), 1.0f, 1e-6);
+}
+
+TEST(ignition_gate_never_raises_a_lower_request) {
+  const HeaterProfile p = vevor_v2_profile();
+  CHECK_NEAR(apply_ignition_fuel_gate(0.3f, RUN_STATE_GLOW_PREHEAT, true, false, p), 0.3f, 1e-6);
+  CHECK_NEAR(apply_ignition_fuel_gate(0.5f, RUN_STATE_IGNITED, true, true, p), 0.5f, 1e-6);
 }
 
 // --- Thermostat: AUTO three-phase ---

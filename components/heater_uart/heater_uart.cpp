@@ -105,8 +105,20 @@ void HeaterUart::loop() {
     const Thermostat::Params params = build_params();
 
     ControlInputs inputs;
-    inputs.output_fraction = output_domain::normalized_from_hz(thermostat_.pump_request(), profile_);
-    inputs.fan_rpm = safety_.fan_rpm(inputs.output_fraction, driver_->telemetry());
+    // Ignition fuel gate: Vevor-class ECMs dose their pre-flame pumps from the
+    // requested level, so requesting full power before the flame is
+    // established floods the combustion chamber. Hold the wire request at the
+    // profile's pre-ignition floor while the glow is off, at the glow rate
+    // while the glow is lit; release when the glow goes out (flame confirmed)
+    // or the heater is running. Idle polls are unaffected (no start intent).
+    const Telemetry &tlm = driver_->telemetry();
+    const bool glow_lit = tlm.glow_plug_current > 0.0f || tlm.glow_a > 0.0f ||
+                          tlm.glow_b > 0.0f || tlm.glow_c > 0.0f;
+    const float request_hz = apply_ignition_fuel_gate(
+        thermostat_.pump_request(), tlm.run_state,
+        driver_->on_requested() || tlm.on, glow_lit, profile_);
+    inputs.output_fraction = output_domain::normalized_from_hz(request_hz, profile_);
+    inputs.fan_rpm = safety_.fan_rpm(inputs.output_fraction, tlm);
     inputs.desired_temp = desired_temp_setting_;
     inputs.room_temp = room_sensor_.value();
     inputs.priming_active = is_priming_;
