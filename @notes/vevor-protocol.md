@@ -318,40 +318,44 @@ pump at floor (HX > 145°C so the soot override releases), then probe
 `esphome logs` (proves the probe bytes are actually on the wire before
 interpreting a negative). Restore: probe 0, mode Off.
 
-## Pre-flame fuel gate (2026-11-09, bench-verified)
+## Fuel-before-glow defect and the ignition fuel gate (2026-11-09, bench-verified)
 
-The 2kW's ECM runs its own pre-flame fuel phases and doses them **from the
-requested power level** — it self-primes, there is no protocol prime command, so
-the requested level is the only host-side lever. v2 HEAT mode entry seats
-`pump_freq_max` (level 10), carried in the START frame **and** every status poll
-while the ECM is pre-flame; that was the flood.
+The defect: the fuel pump was **dosed before the glow plug cycle**. The ECM
+self-primes (no protocol prime command) and scales that dosing from the
+**requested power level**; v2 HEAT mode entry seats `pump_freq_max` (level 10),
+carried in the START frame and every 1 Hz poll — so the first frames after a
+start request asked for maximum fuel, the pump ramped with the glow still off,
+and the chamber ended up wet (white smoke, hard/silent start failures).
 
-Two dosing phases precede the flame:
+Measured on the wire after the fix, level 8 (`/tmp/vevor-coldstart-b6.log`):
 
-| phase | ECM raw state | glow | HX | our wire request (gate armed) |
+| time | wire request | glow (cluster) | pump | note |
 |---|---|---|---|---|
-| pre-glow | 0/1 | off | flat | `pump_freq_pre_ignition` (floor, level 1) |
-| glow phase | **2** | **lit** | flat/falling | `pump_freq_glow` (mid, level 8) |
-| flame achieved | 2 -> 4 | **out** | rising | thermostat request (released) |
+| 13:42:30.6 | START, level 01 | off | 0.0 Hz | floor from the first frame |
+| 13:42:32-42 | polls, level 01 | off | 0.0 Hz | **pre-glow window: no fuel at all** |
+| 13:42:43.9 | — | **ON 3.0 A** | 0.0 Hz | glow cycle begins |
+| 13:42:42.7 | polls, level 08 | lit | 0.0 Hz for 68 s | mid rate, ECM not dosing yet |
+| 13:43:51.5 | level 08 | lit | **1.5 Hz** | dosing starts |
+| 13:44:23.9 | released to level 0A | **OFF** | 1.5 -> 1.7 Hz | flame established, full power |
 
-**State 2 is not "ignited" on this unit** — the reference state table's
-"IGNITED" label is wrong; the ECM holds raw state 2 through the flame, so a
-release keyed on the state label leaves the glow-phase flood in place. The real
-flame-established signal is the **glow cluster going to zero** (bytes 24-27, also
-the glow current): it coincides with the HX starting to rise at combustion rate.
-Release condition: glow out (cluster -> 0 while state is 2) or `RUNNING`.
+So the gate holds two different pre-flame requests for two different reasons:
 
-Measured dosing on the wire (2026-11-09 bench, warm starts from HX ~40 °C):
+- **glow off** -> `pump_freq_pre_ignition` (floor, level 1): this is the actual
+  defect window. A level-1 request produces **no dosing at all**, so nothing is
+  injected before the glow plug runs.
+- **glow lit, pre-flame** -> `pump_freq_glow` (mid, 2.0 Hz = level 8): the ECM
+  will not dose from a level-1 request at all, so flooring this window starves
+  the glow cycle — benched, level 3 (1.0 Hz) gave pump 0.0 Hz and the ECM
+  aborted the start ~50 s in (no flame, HX flat, `err=0`, silent).
 
-- requested level 1 (0.5 Hz) -> ECM dosed **0.0 Hz**
-- requested level 3 (1.0 Hz) -> **0.0 Hz, ECM aborted the start ~50 s in**, no
-  flame, HX flat, `err=0` (silent — no E10 on the wire)
-- requested level 8 (2.0 Hz) -> **1.5 Hz dosing from ~70 s into the glow phase**,
-  clean ignition at ~100 s, no E-codes
-- requested level 10 (2.5 Hz) -> 1.5-2.4 Hz, the original over-priming
+Release: glow-out (glow cluster bytes 24-27 -> 0, which coincides with the flame
+being established) or `RUNNING`. Not the state label — see below.
 
-So the ECM's dosing floor sits between level 3 and level 8 — flooring the glow
-phase starves the flame, which is why the gate has a separate mid rate.
+State byte labels: the ECM reports state 2 ("Glow Plug Pre-heat") through the
+pre-glow window and state 4 ("Ignited – Heating to Full Temp") from ~2 s before
+the glow current appears, so state 4 is entered ~10 s into the start and is held
+for the whole glow cycle. Release keyed on state 2->4 (the first gate version)
+left the glow-cycle request at full power; the bench fixed that.
 
 Implementation: `apply_ignition_fuel_gate()` (`heater_policies.h`, called from
 `HeaterUart::loop()` at the driver boundary). Vevor presets:
@@ -362,12 +366,12 @@ All three keys are YAML-overridable (`pump_freq_pre_ignition`, `pump_freq_glow`,
 `gate_fuel_before_ignition`) for A/B without a recompile; out-of-range values
 revert to the preset in `validate_profile_invariants()`.
 
-Open observations: at level 8 the ECM burned ~35 s, then went to cooldown and
-parked in standby (err=0); the glow relit during cooldown (~8-9 A, possibly
-burning off rich residue — unverified). The gate holds the floor while in
-cooldown, so a cooldown relight that is actually a re-ignition attempt would be
-starved; and level 8 is untested on a true cold start (under-priming risk is
-worse cold — 2.0 Hz is the floor of the working band, not its middle).
+Open: at level 8 the ECM burned ~35 s, then went to cooldown and parked in
+standby (err=0); the glow relit at 7.0 A during the purge — residue burn-off or
+a re-ignition attempt is unverified, and the gate holds the floor in cooldown, so
+a real re-ignition there would be starved. The pre-glow behaviour is driven by
+the requested level, not by HX temperature, so the fix does not depend on how
+warm the unit is at start.
 
 ## Deploy path (lab-heater)
 
