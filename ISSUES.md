@@ -101,6 +101,16 @@ Status markers: **OPEN** (actionable) · **PARKED** (deliberately deferred) ·
     All three keys are YAML-overridable for A/B; `validate_profile_invariants()`
     reverts out-of-range values to the preset. Host tests 95 / 633,
     `stub_check.sh` clean.
+    **Cold-start caveat (same day, after the 2.0-preset reflash):** two starts on a
+    cold plug (ECM's own HX reading 39-42 °C) both ran the glow and aborted with
+    the pump never moving — 63 s then 37 s, glow drawing 4-6 A vs 3 A in the
+    passing run, `err=0` throughout. The wire was at level 08 both times, so the
+    gate was not the cause: the ECM never asked for fuel. The shrinking window
+    (63 s -> 37 s) looks like its failed-attempt counter. The level-8 PASS above
+    was therefore obtained on a *warm* plug following prior attempts and does NOT
+    yet hold for a genuine cold start — 2.0 Hz is the bottom of the working band
+    and may be too low when cold. Next steps: retry after a power cycle; if it
+    stalls again, raise `pump_freq_glow` to 2.25 Hz (level 9) — YAML only.
     **Open:** (a) the glow relights during cooldown on **every** stop observed
     (3/3: user stop 08:xx, level-8 cycle end 13:44, shutdown 14:19) at 4-7 A for
     ~30-40 s — routine post-glow burn-off, most likely, not a fault (err=0 every

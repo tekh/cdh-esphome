@@ -367,11 +367,12 @@ All three keys are YAML-overridable (`pump_freq_pre_ignition`, `pump_freq_glow`,
 revert to the preset in `validate_profile_invariants()`.
 
 Open: at level 8 the ECM burned ~35 s, then went to cooldown and parked in
-standby (err=0); the glow relit at 7.0 A during the purge — residue burn-off or
-a re-ignition attempt is unverified, and the gate holds the floor in cooldown, so
-a real re-ignition there would be starved. The pre-glow behaviour is driven by
-the requested level, not by HX temperature, so the fix does not depend on how
-warm the unit is at start.
+standby (err=0); the glow relits during every cooldown observed. **Cold start is
+not yet proven:** two post-reflash cold starts (ECM HX 39-42 °C) ran the glow and
+aborted without ever dosing — 63 s and 37 s, glow 4-6 A vs 3 A on the passing
+run, `err=0`, wire at level 08 the whole time. Level 8 (2.0 Hz) is the bottom of
+the working band; if a cold start stalls again, raise `pump_freq_glow` to 2.25 Hz
+(level 9).
 
 ## Deploy path (lab-heater)
 
