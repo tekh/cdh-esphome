@@ -181,17 +181,20 @@ inline HeaterProfile profile_vevor_2kw() {
   //  1. Pre-glow (glow OFF): clamp to the floor (level 1). A level-1 request makes
   //     the ECM dose 0.0 Hz - this is what fixed the original defect (fuel going
   //     in before the glow plug ever ran).
-  //  2. Glow phase (glow LIT, pre-flame): the ECM doses 1.5 Hz from ~70 s into the
-  //     glow and then RAMPS up while it waits for the flame. Level 3 starves it
-  //     (pump 0.0 Hz, abort ~50 s). Level 10 lets the ramp run to 2.6 Hz, which on
-  //     a cold start (glow 12 A, 190 s to light) put ~2 min of fuel into the
-  //     chamber -> thick white smoke before ignition. Level 8 (2.0 Hz) doses
-  //     1.5 Hz and lit cleanly with no smoke, so the glow stage is capped there.
+  //  2. Glow phase (glow LIT, pre-flame): the ECM doses from ~70 s into the glow and
+  //     then RAMPS while it waits for the flame. Measured ladder on this unit:
+  //     request level 3 or below -> pump 0.0 Hz, start aborted (~50 s);
+  //     level 8  -> 1.5 Hz dosing, clean ignition, no smoke;
+  //     level 10 -> 1.5 -> 2.6 Hz ramp, ~2 min of fuel on a cold start, thick white
+  //     smoke before it lights (glow 12 A, flame at +190 s).
+  //     So the glow stage is capped below max: it must stay above the dosing
+  //     threshold (somewhere between levels 3 and 8) and low enough that the ramp
+  //     stays small. Currently 1.5 Hz = level 6, one rung below the proven level 8.
   // Note: after repeated failed starts the ECM latches and refuses fuel at ANY
   // level until power-cycled at 12 V (ISSUES #19) - do not read a no-dose abort as
   // a level problem until the unit has been power-cycled.
   p.pump_freq_pre_ignition = p.pump_freq_min;
-  p.pump_freq_glow = 2.0f;
+  p.pump_freq_glow = 1.5f;
   p.gate_fuel_before_ignition = true;
   // 2 kW: smaller blower wheel, lower airflow
   p.fan_rpm_min = 900;

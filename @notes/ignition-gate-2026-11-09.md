@@ -65,7 +65,7 @@ return min(requested_hz, profile.pump_freq_pre_ignition);   // glow off: the def
 |---|---|---|
 | `gate_fuel_before_ignition` | true | Vevor profiles only |
 | `pump_freq_pre_ignition` | 0.5 Hz (level 1) | **the fix for the original defect** — ECM doses 0.0 Hz |
-| `pump_freq_glow` | **2.0 Hz (level 8)** | caps the ECM's glow-phase ramp; level 10 produced thick white smoke on a cold start |
+| `pump_freq_glow` | **1.5 Hz (level 6)** | caps the ECM's glow-phase ramp; level 10 produced thick white smoke on a cold start, level 8 was clean, 6 is the next rung down (under test) |
 
 Two findings, two knobs. The pre-glow floor kills fuel before the glow plug. The
 glow-phase cap limits how much the ECM ramps while it waits for a cold chamber to
@@ -167,7 +167,8 @@ dosing 70 s in and keeps ramping while a cold chamber refuses to light, so ~2 mi
 of fuel accumulates and burns off as white smoke once it catches.
 
 Level 8 caps that ramp (dosed 1.5 Hz, lit cleanly twice). Level 10 is too much on a
-cold start. Note the earlier "level 8 refuses to dose" conclusion came from runs
+cold start. The cap is now at level 6 (1.5 Hz request) as the next rung down — under
+test; the hard floor is just above level 3, where the ECM stops dosing altogether. Note the earlier "level 8 refuses to dose" conclusion came from runs
 taken while the ECM was locked out — that data was invalid, and it had pushed the
 tuning to level 10 in the first place.
 
