@@ -2,8 +2,9 @@
 
 The 2026-10-24 refactor of `components/heater_uart/` — why the code is shaped the
 way it is. Phases 0–5 all complete, each device-verified on the bench (Vevor
-behaviour unchanged at every step). The pre-refactor code lives on the
-`vevor_2kw` branch; the deeper analysis and full phase history are in git
+behaviour unchanged at every step). The pre-refactor code is preserved at tag
+`backup/vevor_2kw-pre-refactor` (the `vevor_2kw` branch, retired 2026-11-17);
+the deeper analysis and full phase history are in git
 (history of `ROADMAP.md` / `ARCHITECTURE-ANALYSIS.md, merged here) and in the
 Hindsight memory.
 

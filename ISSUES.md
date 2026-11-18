@@ -342,7 +342,8 @@ Status markers: **OPEN** (actionable) · **PARKED** (deliberately deferred) ·
 17. **IMPLEMENTED 2026-10-24 — multi-heater architecture refactor complete
     (refactor Phases 0-5, all device-verified; DESIGN.md).** Landed on `main` (as the
     `arch_analysis` branch, renamed in 2026-10-24; the pre-refactor layout is
-    preserved on the `vevor_2kw` branch and the old `main` tip is tagged
+    preserved at tag `backup/vevor_2kw-pre-refactor` (the `vevor_2kw` branch,
+    retired 2026-11-17) and the old `main` tip is tagged
     `backup/main-pre-replace`). Component layout changed
     significantly: `heater_uart.cpp` is now a facade over `heater_policies.*`
     (Thermostat / CombustionSafety / RoomSensorGuard, pure + host-tested) and
@@ -354,8 +355,9 @@ Status markers: **OPEN** (actionable) · **PARKED** (deliberately deferred) ·
     code — the "Adding a New Heater" checklist in the README is the contract.
     Host tests: `make -C tests` (81 tests / 586 checks) + `tests/stub_check.sh`
     run before every commit. Behaviour on the bench unit (vevor_2kw_v2) was
-    verified unchanged at every phase's flash. Old layout recoverable at the
-    `vevor_2kw` branch base and tag `lcd-injection-final` (LCD path).
+    verified unchanged at every phase's flash. Old layout recoverable at tag
+    `backup/vevor_2kw-pre-refactor` (branch `vevor_2kw` retired 2026-11-17) and
+    tag `lcd-injection-final` (LCD path).
 
 18. **DEPLOYED 2026-10-27 — AUTO would not restart while the Vevor bus was silent
     (frame-starved off-state recheck).**
