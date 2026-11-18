@@ -78,14 +78,17 @@ heater_uart:
 | `heater_model` | Heater | Protocol | Baud | Pump freq (Hz) | Fan (RPM) | HX critical | Status |
 |---|---|---|---|---|---|---|---|
 | `jeabong_8kw` | Jeabong 8kW | BDAP `0x76/0x16` | 25000 | 1.3 - 5.5 | 1450 - 4500 | 265 °C | Validated on the original reference hardware |
-| `vevor_2kw` | Vevor 2kW (XMZ-D2) | Vevor `0xAA/0x66/0x77` | 4800 | 0.5 - 2.5 | 900 - 3000 | 205 °C | Same hardware as v2; the firmware-modulated HEAT policy is the unexercised part |
+| `vevor_2kw` | Vevor 2kW (XMZ-D2), `legacy HEAT policy` | Vevor `0xAA/0x66/0x77` | 4800 | 0.5 - 2.5 | 900 - 3000 | 205 °C | Same hardware as v2 and the **base preset it derives from**; its firmware-modulated HEAT policy is the unexercised part. Bench fallback, not a product |
 | `vevor_2kw_v2` | Vevor 2kW (XMZ-D2), user owns the level in HEAT | Vevor `0xAA/0x66/0x77` | 4800 | 0.5 - 2.5 | 900 - 3000 | 205 °C | **In production** (lab-heater-butler.yaml); bench-verified incl. fault guards; open tuning items in ISSUES.md #5-10 |
 
 > `vevor_2kw` and `vevor_2kw_v2` are the same hardware with identical tuning
-> values; the profile differs only in the HEAT-mode policy (`heat_mode_manual`).
-> Keep one as a one-line revert target when experimenting with the other. Any
-> value that later proves wrong gets fixed in the preset (and can be
-> overridden per-deployment in YAML meanwhile — see Tuning Overrides below).
+> values — v2 is literally `profile_vevor_2kw()` plus the `heat_mode_manual`
+> policy flag, so no tuning value can drift between them (a host test pins the
+> equality field by field). Keep the v1 entry as the one-line revert target when
+> experimenting with the HEAT policy; it is a bench fallback with a legacy
+> HEAT behaviour, not a shipping model. Any value that later proves wrong gets
+> fixed in the preset (and can be overridden per-deployment in YAML meanwhile —
+> see Tuning Overrides below).
 
 ### Capabilities per model
 

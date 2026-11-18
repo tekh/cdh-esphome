@@ -161,7 +161,7 @@ inline HeaterProfile profile_jeabong_8kw() {
 // this profile is used for live control.
 inline HeaterProfile profile_vevor_2kw() {
   HeaterProfile p{};
-  p.name = "Vevor 2kW";
+  p.name = "Vevor 2kW (legacy HEAT policy)";
   p.model = HeaterModel::VEVOR_2KW;
   // Vevor bus (per zatakon/esphome-vevor-heater RE): 4800 baud, AA66/AA77 frames,
   // inverted logic levels. Requires uart: baud_rate 4800 + inverted pins in YAML.
