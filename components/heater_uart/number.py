@@ -33,6 +33,10 @@ HeaterPowerLevelNumber = heater_uart_ns.class_(
     "HeaterPowerLevelNumber", number.Number, cg.Component
 )
 
+HeaterRestartOffsetNumber = heater_uart_ns.class_(
+    "HeaterRestartOffsetNumber", number.Number, cg.Component
+)
+
 CONF_HEATER_UART_ID = "heater_uart_id"
 
 # Number types
@@ -40,6 +44,7 @@ TYPE_TEMPERATURE = "temperature"
 TYPE_PUMP = "pump"
 TYPE_POWER_LEVEL = "power_level"
 TYPE_FAN_PROBE = "fan_probe"
+TYPE_RESTART_OFFSET = "restart_offset"
 
 TEMPERATURE_SCHEMA = (
     number.number_schema(HeaterTemperatureNumber)
@@ -99,12 +104,30 @@ FAN_PROBE_SCHEMA = (
     .extend(cv.COMPONENT_SCHEMA)
 )
 
+# AUTO-mode restart offset (hysteresis): how far below the setpoint the room
+# must fall before AUTO re-ignites. 0.1°C resolution, 0.0-2.0°C by default.
+# The YAML `auto_shutdown_hysteresis:` key is the boot default; this dial is the
+# runtime override. Rendered as a slider (HA) rather than a box.
+RESTART_OFFSET_SCHEMA = (
+    number.number_schema(HeaterRestartOffsetNumber)
+    .extend(
+        {
+            cv.GenerateID(CONF_HEATER_UART_ID): cv.use_id(HeaterUart),
+            cv.Optional(CONF_MIN_VALUE, default=0.0): cv.float_,
+            cv.Optional(CONF_MAX_VALUE, default=2.0): cv.float_,
+            cv.Optional(CONF_STEP, default=0.1): cv.float_,
+        }
+    )
+    .extend(cv.COMPONENT_SCHEMA)
+)
+
 CONFIG_SCHEMA = cv.typed_schema(
     {
         TYPE_TEMPERATURE: TEMPERATURE_SCHEMA,
         TYPE_PUMP: PUMP_SCHEMA,
         TYPE_POWER_LEVEL: POWER_LEVEL_SCHEMA,
         TYPE_FAN_PROBE: FAN_PROBE_SCHEMA,
+        TYPE_RESTART_OFFSET: RESTART_OFFSET_SCHEMA,
     },
     default_type=TYPE_TEMPERATURE,
 )

@@ -366,16 +366,98 @@ TEST(enter_auto_cold_starts_at_ignition_rate) {
   CHECK(t.in_standby() == false);
 }
 
-TEST(enter_auto_warm_parks_in_standby_and_stops_if_running) {
+TEST(enter_auto_warm_running_stops_into_auto_shutdown) {
   const HeaterProfile p = jeabong_profile();
   Thermostat t;
   t.begin(p);
-  // room 20 >= threshold 18 -> standby; heater running -> stop
+  // room 20 > target 19 + overshoot 0 -> shutdown criterion; heater running -> stop
   const auto r = t.enter_mode(HeaterMode::AUTO, 20.0f, 19.0f, true,
                               params_for(p), 1000);
   CHECK(r.request_stop == true);
   CHECK(r.enter_cooldown == true);
-  CHECK(t.in_standby() == true);
+  CHECK(t.in_auto_shutdown() == true);  // re-engage path, not the "never started" standby
+  CHECK(t.in_standby() == false);
+
+  // ...and the auto-restart takes over once the room falls below the threshold
+  Telemetry off;
+  const auto rr = t.recheck_off_state(off, 17.9f, 19.0f, HeaterMode::AUTO, params_for(p), 2000);
+  CHECK(rr.request_start == true);
+  CHECK(t.in_auto_shutdown() == false);
+}
+
+TEST(enter_auto_while_running_below_target_keeps_burning) {
+  // Regression: HEAT mode is burning, room is under the setpoint but inside the
+  // restart hysteresis band. Switching to AUTO must not send STOP - that band is
+  // the temperature AUTO waits to FALL TO before re-igniting, not a stop limit.
+  const HeaterProfile p = vevor_v2_profile();
+  Thermostat t;
+  t.begin(p);
+  // target 19.0, hysteresis 1.0 -> threshold 18.0. Room 18.6: below target,
+  // above threshold (the exact report: heater cut out with the room under setpoint).
+  const auto r = t.enter_mode(HeaterMode::AUTO, 18.6f, 19.0f, true,
+                              params_for(p), 1000);
+  CHECK(r.request_stop == false);
+  CHECK(r.enter_cooldown == false);
+  CHECK(r.request_start == false);  // already burning: no new start either
+  CHECK(t.in_standby() == false);
+  CHECK(t.in_auto_shutdown() == false);
+}
+
+TEST(enter_auto_while_running_at_threshold_keeps_burning) {
+  const HeaterProfile p = jeabong_profile();
+  Thermostat t;
+  t.begin(p);
+  const auto r = t.enter_mode(HeaterMode::AUTO, 18.0f, 19.0f, true,
+                              params_for(p), 1000);
+  CHECK(r.request_stop == false);  // == threshold is still "at or below": keep heating
+  CHECK(t.in_standby() == false);
+}
+
+// --- Auto restart offset (the runtime dial feeding auto_shutdown_hysteresis) ---
+
+TEST(restart_offset_dial_moves_the_reengage_threshold) {
+  // Room 17.5C, target 19.0C, heater off. threshold = target - hysteresis:
+  //   1.0 -> 18.0 -> 17.5 < 18.0: start
+  //   2.0 -> 17.0 -> 17.5 >= 17.0: stay parked (wider dead band, as dialled)
+  const HeaterProfile p = jeabong_profile();
+
+  Thermostat t1;
+  t1.begin(p);
+  auto params1 = params_for(p);
+  params1.auto_shutdown_hysteresis = 1.0f;
+  const auto r1 = t1.enter_mode(HeaterMode::AUTO, 17.5f, 19.0f, false, params1, 1000);
+  CHECK(r1.request_start == true);
+
+  Thermostat t2;
+  t2.begin(p);
+  auto params2 = params_for(p);
+  params2.auto_shutdown_hysteresis = 2.0f;
+  const auto r2 = t2.enter_mode(HeaterMode::AUTO, 17.5f, 19.0f, false, params2, 1000);
+  CHECK(r2.request_start == false);
+  CHECK(t2.in_standby() == true);
+
+  // Same dial, auto-restart path (heater off after a shutdown): 0.2C offset
+  // re-engages as soon as the room is under target-0.2.
+  Thermostat t3;
+  t3.begin(p);
+  auto params3 = params_for(p);
+  params3.auto_shutdown_hysteresis = 0.2f;
+  t3.set_auto_shutdown(true);
+  Telemetry off;
+  const auto r3 = t3.recheck_off_state(off, 18.7f, 19.0f, HeaterMode::AUTO, params3, 2000);
+  CHECK(r3.request_start == true);  // 18.7 < 18.8
+}
+
+TEST(enter_auto_adopts_start_in_flight) {
+  // running_intent also covers "start requested, telemetry still off" - a mode
+  // switch mid-ignition must not cancel the start.
+  const HeaterProfile p = vevor_v2_profile();
+  Thermostat t;
+  t.begin(p);
+  const auto r = t.enter_mode(HeaterMode::AUTO, 19.5f, 20.0f, true,
+                              params_for(p), 1000);
+  CHECK(r.request_stop == false);
+  CHECK(t.in_standby() == false);
 }
 
 TEST(enter_auto_stale_no_blind_start) {

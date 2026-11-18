@@ -130,6 +130,61 @@ Status markers: **OPEN** (actionable) · **PARKED** (deliberately deferred) ·
     ECM ACKed power=10 and still refused). Our component cannot clear an ECM
     lockout — bench discipline is: few attempts, then cut 12 V.
 
+20. **FIXED 2026-11-17 — switching HEAT -> AUTO stopped a heater that was still
+    under the setpoint.** Field report: heater burning in Heat mode, room below
+    the desired temperature, selecting Auto sent STOP (cooldown, heater off).
+    Cause: `Thermostat::enter_mode(AUTO)` used `standby_threshold()` —
+    `target - auto_shutdown_hysteresis`, a whole 1.0 °C *below* the setpoint —
+    as its stop condition whenever the heater was running. Any room reading in
+    `[target-1.0, target)` therefore satisfied "too warm -> standby" and the
+    mode switch shut the burn down, while the periodic machine would have kept
+    heating (its shutdown criterion is pump at min AND room > target +
+    `auto_shutdown_overshoot`, i.e. at/above the setpoint — item 12). Two
+    different thresholds for the same decision.
+    Fix: mode entry splits on `running_intent` before touching temperature —
+    a running heater (or a start already in flight) is *adopted*: no STOP, no
+    new START, `in_standby_` cleared, and `control()` takes over at the next
+    frame; it stops only on the shutdown criterion (room > target + overshoot),
+    which parks the state in `in_auto_shutdown_` so the normal auto-restart
+    (target - hysteresis, item 12/#18) re-engages after cooldown. Not-running
+    entry is unchanged (start below target-hysteresis, otherwise standby). Side
+    benefit: a mode switch during ignition no longer cancels the start frame.
+    Host tests: `enter_auto_while_running_below_target_keeps_burning`,
+    `enter_auto_while_running_at_threshold_keeps_burning`,
+    `enter_auto_adopts_start_in_flight`, and
+    `enter_auto_warm_running_stops_into_auto_shutdown` (rewritten: it now
+    asserts the `auto_shutdown_active` path instead of standby). 98 tests /
+    645 checks, `stub_check.sh` clean.
+
+21. **ADDED 2026-11-17 — AUTO restart offset is a live slider.** Request: control
+    the auto-mode restart offset (the 1.0 °C re-engage hysteresis) from HA,
+    0.0-2.0 in 0.1 °C steps. New number entity `type: restart_offset`
+    (`HeaterRestartOffsetNumber`, `heater_restart_offset_number.{h,cpp}`) writes
+    through `HeaterUart::set_auto_shutdown_hysteresis()` — the same member
+    `build_params()` hands to `Thermostat::Params`, so there is one source of
+    truth and no new policy code. YAML `auto_shutdown_hysteresis:` stays the boot
+    default; `update()` republishes the live value every cycle so a reboot (or a
+    YAML change) cannot leave the slider lying. Rendered as an HA slider
+    (`mode: slider`, unit °C); the dial's span is YAML-configurable
+    (`min_value`/`max_value`/`step`) and `setup()` warns if the configured
+    hysteresis falls outside it.
+    Deliberately **not persisted** — the component still has no Preferences
+    store (firmware rule: nothing survives a reboot; ESPHome 2026.10.2 `number`
+    has no `restore_value`). A power blip therefore returns the offset to the
+    YAML value, which is the documented behaviour.
+    Band arithmetic for reference: shutdown at `target + auto_shutdown_overshoot`
+    (0.0 on this unit = the setpoint, item 12), restart at `target - offset`. So
+    the two keys are the two halves of the dead band. 0.0 is accepted (the
+    request) but collapses the band into setpoint short-cycling; `control()`
+    warns below 0.2 and names the ignition-cycle cost (glow plug life, and the
+    ECM's failed-start latch). Useful range 0.2-1.0.
+    Verified: `esphome config` **and a full `esphome compile`** on the hoas
+    add-on (ESPHome 2026.10.2, image built, 49.7 % flash) with the deployed
+    files; host tests 99 / 649 with
+    `restart_offset_dial_moves_the_reengage_threshold` (same room, offsets 1.0
+    vs 2.0 -> start vs parked; 0.2 offset on the auto-restart path);
+    `stub_check.sh` clean (its `number` stub grew `NumberTraits`/`traits`).
+
 5. **FIXED 2026-10-12 — the parser no longer decodes byte 13.** It now decodes the
    slots the capture proved: **byte 15 → `fan_voltage`**, **byte 27 → glow current**
    (candidate), and **bytes 24-26 → `glow_a`/`glow_b`/`glow_c`** published raw and

@@ -31,6 +31,8 @@ Thermostat::Result Thermostat::enter_mode(HeaterMode mode, float room_temp, floa
 
     } else if (mode == HeaterMode::AUTO) {
         const float threshold = standby_threshold(target_temp, params);
+        const float shutdown_temp = target_temp + params.auto_shutdown_overshoot;
+        in_auto_shutdown_ = false;
 
         if (params.external_sensor_present && params.sensor_stale) {
             // No blind starts: the room temperature is stale (sensor dead or
@@ -43,6 +45,31 @@ Thermostat::Result Thermostat::enter_mode(HeaterMode mode, float room_temp, floa
                 out.request_stop = true;
                 out.enter_cooldown = true;
             }
+        } else if (running_intent) {
+            // The heater is already burning (HEAT mode, or a start already in
+            // flight): a mode switch must not re-decide the burn from the
+            // RESTART threshold. standby_threshold() is the temperature the
+            // room must FALL TO before AUTO re-engages, so it sits a whole
+            // hysteresis below the target - using it as a stop condition here
+            // killed a running heater while the room was still under the
+            // setpoint (target 20, hysteresis 1.0: any room in 19..20 shut
+            // down on the switch, discarding exactly the heat asked for).
+            // Hand the burn to control(), which ramps it down and shuts down
+            // only on its own criterion (pump at min AND room > target +
+            // overshoot) - the same temperature the periodic machine uses.
+            if (room_temp > shutdown_temp) {
+                HEATER_LOGI(TAG,
+                            "Mode Auto: room %.1f°C > %.1f°C shutdown threshold, stopping heater",
+                            room_temp, shutdown_temp);
+                out.request_stop = true;
+                out.enter_cooldown = true;
+                in_auto_shutdown_ = true;  // re-engage below threshold when it cools
+            } else {
+                HEATER_LOGI(TAG,
+                            "Mode Auto: adopting running heater (room %.1f°C, target %.1f°C) - control() takes over",
+                            room_temp, target_temp);
+            }
+            in_standby_ = false;
         } else if (room_temp < threshold) {
             // Cold enough - start heater
             HEATER_LOGI(TAG, "Mode Auto: room %.1f°C < %.1f°C threshold, starting heater",
@@ -56,13 +83,7 @@ Thermostat::Result Thermostat::enter_mode(HeaterMode mode, float room_temp, floa
             HEATER_LOGI(TAG, "Mode Auto: room %.1f°C >= %.1f°C threshold, entering standby",
                         room_temp, threshold);
             in_standby_ = true;
-            // If heater is running, stop it
-            if (running_intent) {
-                out.request_stop = true;
-                out.enter_cooldown = true;
-            }
         }
-        in_auto_shutdown_ = false;
 
     } else if (mode == HeaterMode::ON) {
         // Force on - start heater regardless of temperature

@@ -17,7 +17,7 @@ This project is a custom ESPHome component designed to interface with heaters us
   - Pump Frequency
   - Fan Voltage
 - **Control Entities**:
-  - **Number**: Desired Temperature (8-35°C), Pump Frequency (1.3-5.5 Hz)
+  - **Number**: Desired Temperature (8-35°C), Pump Frequency (1.3-5.5 Hz), AUTO Restart Offset (0.0-2.0°C in 0.1°C steps - runtime override of `auto_shutdown_hysteresis`)
   - **Select**: Mode Selection (Off/Auto/On)
 - **Binary Sensors**:
   - On/Off State
@@ -234,7 +234,7 @@ When using standalone mode with the mode select set to "Auto", the component pro
 Fine-tune the Auto mode behavior with these parameters:
 
 - `auto_shutdown_overshoot` (schema default: 0.5°C, lab-heater: 0.0): Temperature above target before auto-shutdown triggers. 0.0 = shut off as soon as the room crosses the setpoint (2026-10-20: with 0.5 the heater idled at min level indefinitely when the room's min-output equilibrium sat below target+0.5)
-- `auto_shutdown_hysteresis` (schema default: 1.5°C, lab-heater: 1.0): Temperature drop below target needed before auto-restart (the re-engage offset)
+- `auto_shutdown_hysteresis` (schema default: 1.5°C, lab-heater: 1.0): Temperature drop below target needed before auto-restart (the re-engage offset). Also exposed as a **runtime slider**: `number: - platform: heater_uart / type: restart_offset` (0.0-2.0°C, 0.1°C steps, default YAML range). The YAML key is the boot default; the slider overrides it live and is not persisted (a reboot returns to the YAML value). Shutdown is `target + overshoot`, restart is `target - hysteresis`, so the two keys define the whole dead band.
 - `approach_threshold` (default: 1.0°C): Distance from target when approach control begins
 - `ambient_heat_limit` (default: 26.0°C): HEAT mode safety limit - forces shutdown if room > X°C (range: -40 to 80°C)
 - `firmware_safety_oversight` (default: true): Set `false` ONLY on heaters whose ECM handles combustion safety itself (the Vevor profiles) to let the ECM be the sole safety authority. Ignored with a warning on firmware-safety hardware (the 8kW).

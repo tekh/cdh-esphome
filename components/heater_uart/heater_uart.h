@@ -49,6 +49,7 @@ class HeaterUart : public PollingComponent, public uart::UARTDevice, public Byte
   void set_pump_number(number::Number *num) { this->pump_number_ = num; }
   void set_power_level_number(number::Number *num) { this->power_level_number_ = num; }
   void set_fan_probe_number(number::Number *num) { this->fan_probe_number_ = num; }
+  void set_restart_offset_number(number::Number *num) { this->restart_offset_number_ = num; }
   void set_mode_select(select::Select *sel) { this->mode_select_ = sel; }
 
   // Configuration setters
@@ -167,6 +168,10 @@ class HeaterUart : public PollingComponent, public uart::UARTDevice, public Byte
   float get_pump_freq_max() const { return profile_.pump_freq_max; }
   uint8_t get_temp_min() const { return profile_.temp_min; }
   uint8_t get_temp_max() const { return profile_.temp_max; }
+  // AUTO-mode restart offset (°C below the setpoint). YAML is the boot default;
+  // the restart-offset dial writes through set_auto_shutdown_hysteresis().
+  float get_auto_shutdown_hysteresis() const { return auto_shutdown_hysteresis_; }
+  float get_auto_shutdown_overshoot() const { return auto_shutdown_overshoot_; }
 
   // Fuel priming control
   void start_priming();
@@ -193,6 +198,9 @@ class HeaterUart : public PollingComponent, public uart::UARTDevice, public Byte
 
   // Fan speed probe number reference (experimental, Vevor undocumented bytes)
   number::Number *fan_probe_number_{nullptr};
+
+  // AUTO restart-offset dial reference (hysteresis; for state sync)
+  number::Number *restart_offset_number_{nullptr};
 
    // Mode select reference (for state sync)
    select::Select *mode_select_{nullptr};

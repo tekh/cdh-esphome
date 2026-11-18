@@ -15,6 +15,8 @@
     "vevor_driver.cpp",
     "heater_policies.h",
     "heater_policies.cpp",
+    "heater_restart_offset_number.h",
+    "heater_restart_offset_number.cpp",
     "__init__.py"
   ]
 }

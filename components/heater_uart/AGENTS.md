@@ -68,6 +68,12 @@ Key byte positions defined in the owning driver's `parse_frame()`
 - **AUTO mode**: start → approach control → auto-shutdown → standby → restart;
   `Thermostat::enter_mode()` owns mode-entry decisions and shares
   `standby_threshold()` with the periodic machine
+- **Mode entry while the heater is running adopts the burn** (no STOP): a
+  running heater or an in-flight start is handed to `control()` and only stops
+  on the shutdown criterion (room > target + `auto_shutdown_overshoot`).
+  `standby_threshold()` (target - hysteresis) is a *restart* threshold — using
+  it as a stop condition killed a burn while the room was still under the
+  setpoint (ISSUES #20)
 - Parameters: `auto_shutdown_overshoot`, `auto_shutdown_hysteresis`,
   `approach_threshold` + the Phase-4 aggressiveness/cadence keys
   (`Thermostat::Params`, YAML-overridable)

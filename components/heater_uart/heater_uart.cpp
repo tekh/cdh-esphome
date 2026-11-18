@@ -274,6 +274,12 @@ void HeaterUart::update() {
     if (power_level_number_ != nullptr) {
         power_level_number_->publish_state(get_power_level_display());
     }
+
+    // Sync the AUTO restart-offset dial with the value the thermostat is
+    // actually using (YAML default until the operator moves it).
+    if (restart_offset_number_ != nullptr) {
+        restart_offset_number_->publish_state(auto_shutdown_hysteresis_);
+    }
 }
 
 // === ByteStream: the driver's view of the bus ===

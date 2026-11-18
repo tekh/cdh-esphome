@@ -207,6 +207,28 @@ number:
     web_server:
       sorting_group_id: sorting_group_controls
 
+  # AUTO-mode restart offset: how far BELOW the setpoint the room must fall
+  # before AUTO re-ignites after a shutdown / while parked in standby.
+  # This is `auto_shutdown_hysteresis` as a live dial (the YAML key above stays
+  # the boot default). Pair it with `auto_shutdown_overshoot:` - the two define
+  # the dead band around the target: shutdown at target+overshoot, restart at
+  # target-offset. 0.0 is allowed but collapses the band (AUTO would short-cycle
+  # at the setpoint); 0.2-1.0 is the useful range. Not persisted: a reboot
+  # returns it to the YAML value.
+  - platform: heater_uart
+    type: restart_offset
+    name: "AUTO Restart Offset"
+    id: heater_restart_offset
+    heater_uart_id: heater
+    min_value: 0.0
+    max_value: 2.0
+    step: 0.1
+    mode: slider
+    unit_of_measurement: "°C"
+    icon: "mdi:thermometer-chevron-down"
+    web_server:
+      sorting_group_id: sorting_group_controls
+
 text_sensor:
   - platform: heater_uart
     run_state:
