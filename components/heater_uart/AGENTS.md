@@ -33,7 +33,7 @@ EXISTING protocol = profile only; a NEW protocol = one new driver.
 | `sensor.py` | Numeric sensors (temp, voltage, current, glow cluster) |
 | `text_sensor.py` | `run_state`, `error_code` human-readable |
 | `binary_sensor.py` | `on_off_state`, `auto_shutdown_active`, `standby_active`, `priming_active` |
-| `number.py` | Temperature + pump frequency + power level + fan probe controls |
+| `number.py` | Temperature + pump frequency + power level + fan probe + AUTO restart offset |
 | `select.py` | Mode: Off/Auto/Heat |
 | `button.py` | Fuel priming button (BDAP-only) |
 | `heater_*.cpp/h` | C++ implementations for number/select entities |
@@ -74,10 +74,15 @@ Key byte positions defined in the owning driver's `parse_frame()`
   `standby_threshold()` (target - hysteresis) is a *restart* threshold — using
   it as a stop condition killed a burn while the room was still under the
   setpoint (ISSUES #20)
+- **AUTO restart offset is a live dial** (`type: restart_offset`, 0.0-2.0 °C in
+  0.1 °C steps) that writes `auto_shutdown_hysteresis_`; the YAML key stays the
+  boot default and nothing persists across a reboot. Restart is
+  `target - offset`, shutdown is `target + auto_shutdown_overshoot` (ISSUES #21)
 - Parameters: `auto_shutdown_overshoot`, `auto_shutdown_hysteresis`,
   `approach_threshold` + the Phase-4 aggressiveness/cadence keys
   (`Thermostat::Params`, YAML-overridable)
-- **HEAT mode**: modulating (8kW/vevor_2kw) or user-owned level (vevor_2kw_v2,
+- **HEAT mode**: modulating (8kW / `vevor_2kw`, the legacy HEAT policy) or
+  user-owned level (vevor_2kw_v2,
   `heat_mode_manual`); ambient heat limit (`ambient_heat_limit`) forces
   shutdown if room > limit in both cases
 - **CombustionSafety**: HX soot floor / too-hot / critical stop

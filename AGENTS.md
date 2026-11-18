@@ -2,7 +2,8 @@
 
 Post-refactor layout (refactor completed 2026-10-24; `DESIGN.md` explains why
 the architecture is shaped this way).
-The pre-refactor code lives on the `vevor_2kw` branch (backup); the old
+The pre-refactor code lives at tag `backup/vevor_2kw-pre-refactor` (the
+`vevor_2kw` branch, retired 2026-11-17); the old
 LCD injection path is under tag `lcd-injection-final`.
 
 ## OVERVIEW
