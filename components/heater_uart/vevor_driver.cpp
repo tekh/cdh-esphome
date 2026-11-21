@@ -142,12 +142,17 @@ void VevorDriver::take_command(uint8_t *command, uint8_t *requested_state) {
     pending_stop_ = false;
     HEATER_LOGI(TAG, "VEVOR: sending STOP");
   } else if (on_request_) {
-    if (telemetry_.run_state == RUN_STATE_OFF) {
-      // keep asserting start until the heater comes up
+    if (telemetry_.run_state == RUN_STATE_OFF || telemetry_.run_state == RUN_STATE_COOLDOWN) {
+      // Keep asserting START until the heater is actually up. Live finding
+      // (2026-11-20): an ECM that faulted (E10) parks in raw state 4 (cooldown)
+      // with `on` still true and ignores a ONE-SHOT 0x06/0x06 - the same thing
+      // the STOP path below documents. A single START frame during cooldown was
+      // therefore swallowed and the operator's re-select of Heat did nothing
+      // while the status read "Cooldown". Persist it, like STOP.
       *command = VEVOR_CMD_RUNSTOP;
       *requested_state = VEVOR_STATE_START;
     } else {
-      *command = VEVOR_CMD_STATUS;  // running status request
+      *command = VEVOR_CMD_STATUS;  // up (glow/ignited/running): running status request
       *requested_state = VEVOR_STATE_RUNNING;
     }
   } else if (telemetry_.run_state != RUN_STATE_OFF && telemetry_.run_state != RUN_STATE_COOLDOWN) {
@@ -256,7 +261,7 @@ bool VevorDriver::parse_frame(const uint8_t *frame, size_t length) {
   // NOTE: byte 13 is deliberately NOT decoded any more. On the XMZ-D2 it reads
   // 0 through the whole glow-preheat phase (glow definitively on) and 78-128
   // while running with the glow off, with only {0,78,88,98,108,118,128} ever
-  // observed - so it is not glow current on this revision. See ISSUES.md #5.
+  // observed - so it is not glow current on this revision. See ISSUES.md V-5.
   telemetry_.glow_plug_current = frame[27];
   telemetry_.glow_a = frame[24];
   telemetry_.glow_b = frame[25];

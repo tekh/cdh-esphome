@@ -19,6 +19,13 @@ Thermostat::Result Thermostat::enter_mode(HeaterMode mode, float room_temp, floa
     Result out;
     const HeaterProfile &profile = *profile_;
 
+    // HEAT self-resume series (see Params::heat_restart_*). A mode entry is a
+    // fresh operator intent: it clears the parked flag and restarts the attempt
+    // budget, so re-selecting Heat after the firmware gave up tries again.
+    heat_restart_attempts_ = 0;
+    heat_restart_parked_ = false;
+    heat_restart_time_ = now;
+
     if (mode == HeaterMode::OFF) {
         // Force off - stop heater if running
         if (running_intent) {
@@ -89,6 +96,11 @@ Thermostat::Result Thermostat::enter_mode(HeaterMode mode, float room_temp, floa
         // Force on - start heater regardless of temperature
         HEATER_LOGI(TAG, "Mode On: forcing heater start");
         out.request_start = true;
+        // This start IS attempt 1 of the HEAT self-resume series: if the ECM
+        // aborts it (E10) the resume in recheck_off_state() retries after the
+        // hold-off, up to the budget, then parks for a human.
+        heat_restart_attempts_ = 1;
+        heat_restart_time_ = now;
         // Start level on a cold start. Manual-HEAT profiles start at FULL POWER and
         // ramp down as the room approaches the requested temperature
         // (control()); everything else keeps the ignition-rate default.
@@ -135,6 +147,17 @@ Thermostat::Result Thermostat::control(const Telemetry &tlm, float room_temp, fl
         }
         out.pump_request_hz = pump_freq_setting_;
         return out;  // block standby/auto-restart/auto-shutdown until fresh readings
+    }
+
+    // === HEAT SELF-RESUME SERIES RESET ===
+    // A confirmed burn ends the series: the ECM only reports RUN_STATE_RUNNING
+    // (raw state 3) once the flame is stable. Deliberately NOT on
+    // RUN_STATE_IGNITED - the Vevor reports raw state 2 ~10 s into every start,
+    // before the glow is even lit, so resetting there would defeat the attempt
+    // cap for exactly the starts that abort with E10.
+    if (mode == HeaterMode::ON && tlm.run_state == RUN_STATE_RUNNING) {
+        heat_restart_attempts_ = 0;
+        heat_restart_parked_ = false;
     }
 
     // === OFF-STATE RECHECK (standby->start + auto-restart) ===
@@ -382,10 +405,15 @@ Thermostat::Result Thermostat::recheck_off_state(const Telemetry &tlm, float roo
 
     const float threshold = standby_threshold(target_temp, params);
 
+    // "Off" for every decision below is `!burning(tlm)`: a faulted ECM parks in
+    // cooldown with `on` still true, and a check written against `tlm.on` alone
+    // sees a running heater where there is a dead one.
+    const bool is_off = !burning(tlm);
+
     // AUTO-RESTART (was auto-shutdown): heater off, room fell below the re-engage
     // threshold. This is the check that a setpoint change (or a cooling room)
     // must be able to reach while the Vevor bus is silent.
-    if (!tlm.on && in_auto_shutdown_ && mode == HeaterMode::AUTO) {
+    if (is_off && in_auto_shutdown_ && mode == HeaterMode::AUTO) {
         if (room_temp < threshold) {
             HEATER_LOGI(TAG, "Auto-restart: room %.1f°C < target %.1f°C - %.1f°C hysteresis",
                         room_temp, target_temp, params.auto_shutdown_hysteresis);
@@ -405,6 +433,52 @@ Thermostat::Result Thermostat::recheck_off_state(const Telemetry &tlm, float roo
             pump_freq_setting_ = profile.pump_freq_initial;
             last_pump_adjust_time_ = now;
             in_standby_ = false;
+        }
+    }
+
+    // HEAT SELF-RESUME: mode ON and the heater is not burning - either genuinely
+    // off, or parked in cooldown behind a latched ECM fault (E10) with `on` still
+    // true. Before this existed, a Heat-mode heater that dropped out stayed cold
+    // until someone re-selected the mode; with the Vevor reporting `on` during
+    // cooldown, nothing in control() ever asked for a restart.
+    if (mode == HeaterMode::ON && is_off) {
+        if (params.ambient_limit_exceeded) {
+            // The HEAT ambient limit is the authority and is asserting STOP every
+            // tick; a START here would only fight it.
+            out.pump_request_hz = pump_freq_setting_;
+            return out;
+        }
+        if (params.oversight_enabled && tlm.hx_temp >= profile.hx_temp_high) {
+            // Combustion safety outranks a comfort resume: never restart into a
+            // heat exchanger the oversight stack calls too hot.
+            out.pump_request_hz = pump_freq_setting_;
+            return out;
+        }
+        if (heat_restart_attempts_ == 0) {
+            // First tick since the heater stopped (or since boot): start the
+            // series clock instead of firing straight away.
+            heat_restart_attempts_ = 1;
+            heat_restart_time_ = now;
+        } else if (!heat_restart_parked_ &&
+                   now - heat_restart_time_ >= params.heat_restart_holdoff_ms) {
+            if (heat_restart_attempts_ >= params.heat_restart_max_attempts) {
+                heat_restart_parked_ = true;
+                HEATER_LOGE(TAG,
+                            "HEAT self-resume gave up after %u start attempt(s): heater not burning, ECM error %u. "
+                            "Cut the 12 V to the heater, then re-select Heat.",
+                            heat_restart_attempts_, (unsigned) tlm.error_code);
+            } else {
+                heat_restart_attempts_++;
+                heat_restart_time_ = now;
+                out.request_start = true;
+                pump_freq_setting_ = params.heat_mode_manual ? profile.pump_freq_max
+                                                             : profile.pump_freq_initial;
+                last_pump_adjust_time_ = now;
+                HEATER_LOGW(TAG,
+                            "HEAT self-resume attempt %u/%u: heater not burning (state %u, err %u) - re-requesting start",
+                            heat_restart_attempts_, params.heat_restart_max_attempts, tlm.run_state,
+                            (unsigned) tlm.error_code);
+            }
         }
     }
 

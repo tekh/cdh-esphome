@@ -126,21 +126,20 @@ void HeaterUart::loop() {
 
     if (driver_->loop(now)) {
         on_fresh_frame(params);
-    } else if (heater_mode_ == HeaterMode::AUTO && !driver_->telemetry().on) {
-        // Frame-independent off-state recheck. The Vevor ECM stops answering
-        // status polls once it is fully off, so on_fresh_frame() (and with it
-        // Thermostat::control()) can stay silent for tens of minutes - starving
-        // the auto-restart/standby check. Run that check on its own 1 Hz timer so
-        // a cooling room, or a raised setpoint, still starts the heater. Safe:
-        // when idle these two checks are the only off-state decisions control()
-        // would have made, and they are no-ops while the heater is running.
-        if (now - last_off_recheck_time_ >= 1000) {
-            last_off_recheck_time_ = now;
-            const Thermostat::Result r = thermostat_.recheck_off_state(
-                driver_->telemetry(), room_sensor_.value(), desired_temp_setting_,
-                heater_mode_, params, now);
-            if (r.request_start) driver_->request_start();
-        }
+    }
+
+    // Frame-independent off-state recheck (AUTO standby/auto-restart + the HEAT
+    // self-resume), on its own 1 Hz timer so a silent bus cannot starve it: the
+    // Vevor ECM stops answering status polls once it is fully off, and a faulted
+    // one sits in cooldown reporting `on` - in both cases decisions chained to
+    // on_fresh_frame() would never be reached. Both recheck arms are no-ops while
+    // the heater is burning, so running it alongside control() is harmless.
+    if (now - last_off_recheck_time_ >= 1000) {
+        last_off_recheck_time_ = now;
+        const Thermostat::Result r = thermostat_.recheck_off_state(
+            driver_->telemetry(), room_sensor_.value(), desired_temp_setting_,
+            heater_mode_, params, now);
+        if (r.request_start) driver_->request_start();
     }
 }
 
@@ -428,6 +427,12 @@ Thermostat::Params HeaterUart::build_params() const {
     params.os_threshold_mid = os_threshold_mid_;
     params.os_mult_big = os_mult_big_;
     params.os_mult_mid = os_mult_mid_;
+    // HEAT self-resume: the facade owns the ambient limit (safety policy), the
+    // thermostat only needs the verdict.
+    params.ambient_limit_exceeded =
+        safety_.ambient_limit_exceeded(heater_mode_, room_sensor_.value(), ambient_heat_limit_);
+    params.heat_restart_holdoff_ms = heat_restart_holdoff_ms_;
+    params.heat_restart_max_attempts = heat_restart_max_attempts_;
     return params;
 }
 

@@ -70,6 +70,11 @@ control logic itself is heater-agnostic.
 
 The `heater_model` option is **required** and must name the physical heater connected:
 
+> Per-model bench behaviour — how each unit sequences a start, what it latches
+> into, what a healthy capture looks like — is in
+> [`docs/heater-notes/`](docs/heater-notes/README.md). Read the page for your
+> model before diagnosing a fault; the tables there are measured, not assumed.
+
 ```yaml
 heater_uart:
   heater_model: jeabong_8kw  # required
@@ -79,7 +84,7 @@ heater_uart:
 |---|---|---|---|---|---|---|---|
 | `jeabong_8kw` | Jeabong 8kW | BDAP `0x76/0x16` | 25000 | 1.3 - 5.5 | 1450 - 4500 | 265 °C | Validated on the original reference hardware |
 | `vevor_2kw` | Vevor 2kW (XMZ-D2), `legacy HEAT policy` | Vevor `0xAA/0x66/0x77` | 4800 | 0.5 - 2.5 | 900 - 3000 | 205 °C | Same hardware as v2 and the **base preset it derives from**; its firmware-modulated HEAT policy is the unexercised part. Bench fallback, not a product |
-| `vevor_2kw_v2` | Vevor 2kW (XMZ-D2), user owns the level in HEAT | Vevor `0xAA/0x66/0x77` | 4800 | 0.5 - 2.5 | 900 - 3000 | 205 °C | **In production** (lab-heater-butler.yaml); bench-verified incl. fault guards; open tuning items in ISSUES.md #5-10 |
+| `vevor_2kw_v2` | Vevor 2kW (XMZ-D2), user owns the level in HEAT | Vevor `0xAA/0x66/0x77` | 4800 | 0.5 - 2.5 | 900 - 3000 | 205 °C | **In production** (lab-heater-butler.yaml); bench-verified incl. fault guards; open tuning items in ISSUES V-5...V-10 |
 
 > `vevor_2kw` and `vevor_2kw_v2` are the same hardware with identical tuning
 > values — v2 is literally `profile_vevor_2kw()` plus the `heat_mode_manual`
@@ -98,7 +103,7 @@ numbers:
 | Capability | `jeabong_8kw` | `vevor_2kw` | `vevor_2kw_v2` |
 |---|---|---|---|
 | Fuel dial | pump frequency (Hz) | power level 1–10 | power level 1–10 |
-| Combustion fan dial | fan RPM exists in the protocol (dial not yet implemented — ISSUES #2) | not in the protocol | not in the protocol |
+| Combustion fan dial | fan RPM exists in the protocol (dial not yet implemented — ISSUES BD-2) | not in the protocol | not in the protocol |
 | Fuel Prime button | **works** — 60 s pump-only run (bleeds air) | **no-op** — ECM self-primes on every start; pressing logs a warning | **no-op** — same |
 | HEAT mode behaviour | firmware modulates like AUTO | firmware modulates like AUTO | **user-owned level**: sent verbatim, ramps down toward target |
 | Combustion-safety authority | the **firmware** — its safety stack is always on (cannot be disabled) | the **ECM** — the firmware's extra HX stack can be disabled via `firmware_safety_oversight: false` | the **ECM** — same opt-out |
@@ -240,6 +245,8 @@ Fine-tune the Auto mode behavior with these parameters:
 - `auto_shutdown_hysteresis` (schema default: 1.5°C, lab-heater: 1.0): Temperature drop below target needed before auto-restart (the re-engage offset). Also exposed as a **runtime slider**: `number: - platform: heater_uart / type: restart_offset` (0.0-2.0°C, 0.1°C steps, default YAML range). The YAML key is the boot default; the slider overrides it live and is not persisted (a reboot returns to the YAML value). Shutdown is `target + overshoot`, restart is `target - hysteresis`, so the two keys define the whole dead band.
 - `approach_threshold` (default: 1.0°C): Distance from target when approach control begins
 - `ambient_heat_limit` (default: 26.0°C): HEAT mode safety limit - forces shutdown if room > X°C (range: -40 to 80°C)
+- `heat_restart_holdoff` (default: 60 s): HEAT mode self-resume delay. If the heater stops burning while the mode is still Heat (ECM abort, E10 fault, cooldown), the firmware re-requests a start after this long instead of leaving the mode dead until someone re-selects it (range: 10-600 s)
+- `heat_restart_max_attempts` (default: 2): start requests allowed per failed series - **the operator's own start counts as attempt 1**, so 2 means one automatic retry. When the budget is spent the mode parks and logs that the heater's 12 V must be cut (the Vevor ECM latches after repeated failed ignitions and only a power cycle clears it). A mode re-select starts a fresh series (range: 1-5; 1 = no auto-retry)
 - `firmware_safety_oversight` (default: true): Set `false` ONLY on heaters whose ECM handles combustion safety itself (the Vevor profiles) to let the ECM be the sole safety authority. Ignored with a warning on firmware-safety hardware (the 8kW).
 
 Example configuration:
@@ -475,6 +482,7 @@ button:
 - Without an external sensor, the component will use heat exchanger temperature as a fallback.
 - In Auto mode, the heater will automatically manage itself in the band `desired_temperature - hysteresis` (auto-restart) to `desired_temperature + overshoot` (auto-shutdown; with the lab setting of 0.0 the band is [target-1.0, target]).
 - In HEAT mode (On), the ambient heat limit provides additional safety by forcing shutdown if room temperature exceeds the configured threshold.
+- HEAT mode **self-resumes**: if the heater stops burning while the mode is still Heat (an ECM-aborted start with an error latch, or a cooldown that never returns to off), the firmware re-requests a start after `heat_restart_holdoff` (60 s), up to `heat_restart_max_attempts` (2) starts per failed series. Then it parks and logs that the heater's 12 V needs to be cut - a Vevor ECM that has failed an ignition several times latches and ignores START frames until it is power-cycled. Re-selecting Heat opens a fresh series.
 
 **Mode Select Usage:**
 - **Off**: Forces heater off. Use this when you don't want the heater to run.
@@ -546,3 +554,22 @@ Enable debug logging in your ESPHome configuration to monitor the UART frames an
 logger:
   level: DEBUG
 ```
+
+### Troubleshooting: "the heater says Cooldown and will not restart"
+
+A Vevor ECM that failed an ignition (`error_code` = `E10 - Startup Failure`) parks
+in its cooldown state and keeps reporting `on`. In that state:
+
+- `run_state` shows **Cooldown** and stays there, `pump_frequency` 0.0 Hz,
+  `fan_speed` 0 RPM, heat exchanger at ambient. `on_off_state` reads **on** the
+  whole time — do not use it to judge whether the heater is actually burning.
+- The firmware detects this and, in Heat mode, retries once after
+  `heat_restart_holdoff` (60 s), then logs
+  `HEAT self-resume gave up after N start attempt(s) … Cut the 12 V` and parks.
+- **The ECM ignores START frames while that latch is set.** Cut the 12 V power to
+  the heater for ~30 s and restore it. The controller keeps asserting the start
+  intent, so the heater can relight as soon as the ECM answers; if it does not,
+  re-select Heat.
+
+If `run_state` stays Cooldown with `err=0` and no fan, the ECM is in its ordinary
+post-run cooldown — that one ends by itself in a few minutes.

@@ -103,6 +103,11 @@ class HeaterUart : public PollingComponent, public uart::UARTDevice, public Byte
   void set_thermostat_os_mid(float v) { os_threshold_mid_ = v; }
   void set_thermostat_os_mult_big(float v) { os_mult_big_ = v; }
   void set_thermostat_os_mult_mid(float v) { os_mult_mid_ = v; }
+  // HEAT-mode self-resume after the heater drops out (fault/cooldown). Defaults:
+  // 60 s hold-off, 2 start attempts per failed series (the operator's own start
+  // counts as attempt 1), then park until the mode is re-selected.
+  void set_heat_restart_holdoff(float seconds) { heat_restart_holdoff_ms_ = (uint32_t)(seconds * 1000.0f); }
+  void set_heat_restart_max_attempts(uint8_t attempts) { heat_restart_max_attempts_ = attempts; }
 
   // Heater mode control
   void set_heater_mode(HeaterMode mode);
@@ -246,6 +251,10 @@ class HeaterUart : public PollingComponent, public uart::UARTDevice, public Byte
   float os_threshold_mid_ = 0.5f;
   float os_mult_big_ = 3.0f;
   float os_mult_mid_ = 2.0f;
+
+  // HEAT self-resume (see Thermostat::Params::heat_restart_*)
+  uint32_t heat_restart_holdoff_ms_ = 60000;
+  uint8_t heat_restart_max_attempts_ = 2;
 
   // Fuel priming state
   bool is_priming_ = false;                // Fuel priming active

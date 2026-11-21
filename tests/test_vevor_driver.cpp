@@ -204,6 +204,42 @@ TEST(vevor_command_state_machine) {
   CHECK(state == 0x02);
 }
 
+TEST(vevor_start_persists_through_cooldown) {
+  // Live defect 2026-11-20: the heater faulted with E10 and parked in raw state
+  // 4 (cooldown) with `on` still true. Selecting Heat again sent a ONE-SHOT
+  // 0x06/0x06 and then dropped to status polls, so the ECM never saw another
+  // start request and the heater could not be restarted from HA or the panel.
+  // A start intent must be as persistent as a stop intent until the unit is up.
+  const HeaterProfile p = vevor_profile();
+  VevorDriver d;
+  d.begin(nullptr, p, 0x78, 0);
+  ControlInputs in;
+  in.output_fraction = 0.5f;
+  d.update_inputs(in);
+  uint8_t cmd, state;
+
+  // ECM faulted: cooldown, E10 latched, `on` still true on the wire
+  const auto rx = make_rx(4, 1, 0x01, 246, 135, 0, 0, 0);
+  CHECK(d.parse_frame(rx.data(), rx.size()));
+  CHECK(d.telemetry().run_state == RUN_STATE_COOLDOWN);
+  CHECK(d.telemetry().on == true);
+
+  // operator re-selects Heat -> intent asserted
+  d.request_start();
+  for (int i = 0; i < 5; i++) {
+    d.take_command(&cmd, &state);
+    CHECK(cmd == 0x06);    // START every frame, not just the first
+    CHECK(state == 0x06);
+  }
+
+  // once the ECM comes up (glow), the intent becomes a running status poll
+  const auto up = make_rx(1, 1, 0, 246, 135, 0, 1200, 8);
+  CHECK(d.parse_frame(up.data(), up.size()));
+  d.take_command(&cmd, &state);
+  CHECK(cmd == 0x02);
+  CHECK(state == 0x08);
+}
+
 TEST(vevor_rx_parse_fields) {
   const HeaterProfile p = vevor_profile();
   VevorDriver d;

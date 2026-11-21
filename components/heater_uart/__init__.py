@@ -55,6 +55,8 @@ CONF_THERMO_OS_BIG = "thermostat_os_big"
 CONF_THERMO_OS_MID = "thermostat_os_mid"
 CONF_THERMO_OS_MULT_BIG = "thermostat_os_mult_big"
 CONF_THERMO_OS_MULT_MID = "thermostat_os_mult_mid"
+CONF_HEAT_RESTART_HOLDOFF = "heat_restart_holdoff"
+CONF_HEAT_RESTART_MAX_ATTEMPTS = "heat_restart_max_attempts"
 
 # Operating voltage constants (must match C++ values)
 VOLTAGE_12V = 0x78  # 120 = 12.0V
@@ -119,6 +121,11 @@ CONFIG_SCHEMA = cv.Schema(
         cv.Optional(CONF_THERMO_OS_MID): cv.float_range(min=0.2, max=5.0),           # °C
         cv.Optional(CONF_THERMO_OS_MULT_BIG): cv.float_range(min=1.0, max=5.0),
         cv.Optional(CONF_THERMO_OS_MULT_MID): cv.float_range(min=1.0, max=5.0),
+        # HEAT self-resume after the heater drops out (fault/cooldown): hold-off
+        # in seconds, and start attempts per failed series (the operator's own
+        # start counts as 1; 1 = no auto-retry, just log the give-up).
+        cv.Optional(CONF_HEAT_RESTART_HOLDOFF): cv.float_range(min=10.0, max=600.0),  # seconds
+        cv.Optional(CONF_HEAT_RESTART_MAX_ATTEMPTS): cv.int_range(min=1, max=5),
     }
 ).extend(uart.UART_DEVICE_SCHEMA)
 
@@ -183,6 +190,8 @@ async def to_code(config):
         (CONF_THERMO_OS_MID, "set_thermostat_os_mid"),
         (CONF_THERMO_OS_MULT_BIG, "set_thermostat_os_mult_big"),
         (CONF_THERMO_OS_MULT_MID, "set_thermostat_os_mult_mid"),
+        (CONF_HEAT_RESTART_HOLDOFF, "set_heat_restart_holdoff"),
+        (CONF_HEAT_RESTART_MAX_ATTEMPTS, "set_heat_restart_max_attempts"),
     ]
     for key, setter in TUNING_KEYS:
         if key in config:

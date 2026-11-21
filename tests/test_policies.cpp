@@ -879,6 +879,142 @@ TEST(recheck_noop_outside_auto_mode) {
   Telemetry off;
   off.on = false;
   off.hx_temp = 60.0f;
-  CHECK(t.recheck_off_state(off, 10.0f, 21.0f, HeaterMode::ON, params_for(p), 6000).request_start == false);
+  // Mode OFF: the AUTO arms and the HEAT resume are both mode-gated
   CHECK(t.recheck_off_state(off, 10.0f, 21.0f, HeaterMode::OFF, params_for(p), 6000).request_start == false);
+  // Mode ON no longer answers "noop" (HEAT self-resume lives there now), but its
+  // first evaluation only starts the series clock - it must not fire a start into
+  // an unknown heater state on the very first tick after boot.
+  CHECK(t.recheck_off_state(off, 10.0f, 21.0f, HeaterMode::ON, params_for(p), 6000).request_start == false);
+}
+
+// --- Thermostat: HEAT self-resume after a dropout -----------------------
+// Live defect 2026-11-20: HEAT mode, the ECM aborted the start with E10 and
+// parked in raw state 4 (cooldown) with `on` still true. There was no restart
+// path for mode ON at all, so the heater sat cold behind a "Cooldown" status and
+// the operator's re-select was swallowed by the one-shot START. Owner rule: HEAT
+// must resume on its own, with a hold-off.
+
+static Telemetry faulted_cooldown_tlm(float hx = 24.0f, uint8_t err = 0x01) {
+  Telemetry t;
+  t.run_state = esphome::heater_uart::RUN_STATE_COOLDOWN;
+  t.on = true;  // the Vevor reports raw state 4 as on
+  t.error_code = err;
+  t.hx_temp = hx;
+  return t;
+}
+
+TEST(heat_self_resume_after_cooldown_fault) {
+  const HeaterProfile p = vevor_v2_profile();
+  Thermostat t;
+  t.begin(p);
+  const Thermostat::Params params = params_for(p);  // 60 s hold-off, 2 attempts
+
+  // operator selects Heat -> that start is attempt 1
+  const auto start = t.enter_mode(HeaterMode::ON, 11.7f, 18.5f, false, params, 0);
+  CHECK(start.request_start == true);
+
+  // the ECM aborts it: cooldown + E10 latched
+  const Telemetry tlm = faulted_cooldown_tlm();
+  // still inside the hold-off: no hammering the ECM
+  CHECK(t.recheck_off_state(tlm, 11.7f, 18.5f, HeaterMode::ON, params, 30000).request_start == false);
+  // hold-off elapsed: attempt 2 is a real start request
+  const auto retry = t.recheck_off_state(tlm, 11.7f, 18.5f, HeaterMode::ON, params, 60000);
+  CHECK(retry.request_start == true);
+  CHECK_NEAR(retry.pump_request_hz, p.pump_freq_max, 1e-4);  // manual HEAT starts at full
+  // second abort: hold-off again, then the budget is spent and it parks
+  CHECK(t.recheck_off_state(tlm, 11.7f, 18.5f, HeaterMode::ON, params, 90000).request_start == false);
+  CHECK(t.recheck_off_state(tlm, 11.7f, 18.5f, HeaterMode::ON, params, 120000).request_start == false);
+  CHECK(t.heat_restart_parked() == true);
+  // parked means parked - no drift back into retrying
+  CHECK(t.recheck_off_state(tlm, 11.7f, 18.5f, HeaterMode::ON, params, 900000).request_start == false);
+
+  // a fresh operator intent (mode re-select) resets the series
+  const auto reentry = t.enter_mode(HeaterMode::ON, 11.7f, 18.5f, false, params, 960000);
+  CHECK(reentry.request_start == true);
+  CHECK(t.heat_restart_parked() == false);
+}
+
+TEST(heat_self_resume_blocked_by_ambient_limit) {
+  const HeaterProfile p = vevor_v2_profile();
+  Thermostat t;
+  t.begin(p);
+  auto params = params_for(p);
+  params.ambient_limit_exceeded = true;  // HEAT limit is the authority (pulse_stop every tick)
+  t.enter_mode(HeaterMode::ON, 27.0f, 18.5f, false, params, 0);
+  CHECK(t.recheck_off_state(faulted_cooldown_tlm(), 27.0f, 18.5f, HeaterMode::ON, params, 600000)
+            .request_start == false);
+}
+
+TEST(heat_self_resume_blocked_by_hot_heat_exchanger) {
+  const HeaterProfile p = vevor_v2_profile();
+  Thermostat t;
+  t.begin(p);
+  const Thermostat::Params params = params_for(p);
+  t.enter_mode(HeaterMode::ON, 11.7f, 18.5f, false, params, 0);
+  // HX at/above the too-hot limit: combustion safety outranks a comfort resume
+  const Telemetry hot = faulted_cooldown_tlm(p.hx_temp_high + 5.0f);
+  CHECK(t.recheck_off_state(hot, 11.7f, 18.5f, HeaterMode::ON, params, 600000).request_start == false);
+  CHECK(t.heat_restart_parked() == false);  // blocked, not exhausted
+}
+
+TEST(heat_self_resume_blocked_when_room_sensor_stale) {
+  const HeaterProfile p = vevor_v2_profile();
+  Thermostat t;
+  t.begin(p);
+  auto params = params_for(p);
+  params.external_sensor_present = true;
+  params.sensor_stale = true;
+  t.enter_mode(HeaterMode::ON, 11.7f, 18.5f, false, params, 0);
+  CHECK(t.recheck_off_state(faulted_cooldown_tlm(), 11.7f, 18.5f, HeaterMode::ON, params, 600000)
+            .request_start == false);
+  // sensor recovers: the resume is allowed again
+  params.sensor_stale = false;
+  CHECK(t.recheck_off_state(faulted_cooldown_tlm(), 11.7f, 18.5f, HeaterMode::ON, params, 660000)
+            .request_start == true);
+}
+
+TEST(heat_resume_series_resets_only_after_a_real_burn) {
+  const HeaterProfile p = vevor_v2_profile();
+  Thermostat t;
+  t.begin(p);
+  const Thermostat::Params params = params_for(p);
+  auto params_on = params;
+  params_on.heat_mode_manual = true;
+  t.enter_mode(HeaterMode::ON, 11.7f, 18.5f, false, params_on, 0);  // attempt 1
+
+  // raw state 2 (RUN_STATE_IGNITED) is reported ~10 s into every start, BEFORE
+  // the glow lights - it must NOT reset the budget or the cap never applies to
+  // the starts that abort with E10.
+  Telemetry preglow;
+  preglow.run_state = RUN_STATE_IGNITED;
+  preglow.on = true;
+  preglow.hx_temp = 24.0f;
+  t.control(preglow, 11.7f, 18.5f, HeaterMode::ON, params_on, 5000);
+  CHECK(t.recheck_off_state(faulted_cooldown_tlm(), 11.7f, 18.5f, HeaterMode::ON, params_on, 60000)
+            .request_start == true);  // attempt 2 still allowed
+
+  // confirmed burn (raw state 3): the series is over, the next dropout gets a
+  // fresh budget
+  Telemetry burning = running_tlm(180.0f);
+  t.control(burning, 11.7f, 18.5f, HeaterMode::ON, params_on, 90000);
+  CHECK(t.heat_restart_parked() == false);
+  // hold-off re-arms from the dropout, and a start is allowed again
+  CHECK(t.recheck_off_state(faulted_cooldown_tlm(), 11.7f, 18.5f, HeaterMode::ON, params_on, 120000)
+            .request_start == false);  // series clock just started
+  CHECK(t.recheck_off_state(faulted_cooldown_tlm(), 11.7f, 18.5f, HeaterMode::ON, params_on, 180000)
+            .request_start == true);
+}
+
+TEST(auto_restart_now_reaches_a_cooldown_parked_heater) {
+  // Same defect class in AUTO: the auto-restart check required !tlm.on, and a
+  // faulted ECM reports on=true while it sits in cooldown - so AUTO could not
+  // restart it either. Cooldown is not a burn.
+  const HeaterProfile p = jeabong_profile();
+  Thermostat t;
+  t.begin(p);
+  t.set_auto_shutdown(true);
+  const auto r =
+      t.recheck_off_state(faulted_cooldown_tlm(60.0f), 18.7f, 21.0f, HeaterMode::AUTO, params_for(p), 6000);
+  CHECK(r.request_start == true);
+  CHECK(t.in_auto_shutdown() == false);
 }

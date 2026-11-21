@@ -68,6 +68,30 @@ The policy layer speaks only the **normalized fuel domain 0.0–1.0**
   flags, protocol timing and sensor-physics constants are deliberately NOT
   user-facing.
 
+## Bench-learned invariants (cheap to violate, expensive to diagnose)
+
+These two are not style preferences — each one produced a heater that looked alive
+in Home Assistant and was in fact dead. They belong in the seams above, so a new
+driver or policy inherits them instead of rediscovering them.
+
+- **A start intent is as persistent as a stop intent.** The Vevor ECM ignores a
+  one-shot `0x06`/`0x05`: frames are re-asserted at 1 Hz until the heater is
+  actually up (`state` left OFF/COOLDOWN) or actually down (`state` became
+  OFF/COOLDOWN). A driver that sends a command once and then falls back to status
+  polls silently drops the operator's action. (ISSUES V-22: selecting Heat after
+  an E10 produced exactly one START frame and then nothing, for 50 minutes.)
+- **"Cooldown" is not a burn.** The ECM reports raw state 4 with `on` true while
+  it sits in cooldown — including after a fault it will never recover from. Every
+  off-state and restart decision tests `Thermostat::burning()`
+  (`on && state != COOLDOWN`), never `telemetry.on`. Treating cooldown as running
+  is what left HEAT mode stuck behind a "Cooldown" status with no restart path,
+  and it starved the AUTO auto-restart the same way.
+- **Any state the firmware waits on needs a path that does not depend on the
+  device talking.** The ECM goes silent once fully off and sits mute behind a
+  latch, so restart decisions live on the facade's 1 Hz timer (`recheck_off_state`)
+  rather than only in `on_fresh_frame()`. A decision chained to an RX frame is a
+  decision the ECM can veto by staying quiet.
+
 ## Adding a heater
 
 Heaters add as **data**, not code: same protocol = one profile factory + enum
@@ -87,5 +111,5 @@ contract); a new protocol adds exactly one `ProtocolDriver` implementation.
 
 Standing constraints that outlive the refactor: only `vevor_2kw_v2` is
 bench-accessible, so BDAP (8kW) stays **parked / compile-verified only**
-(ISSUES.md #1); the room-sensor staleness gate and the ambient HEAT-mode limit
+(ISSUES.md BD-1); the room-sensor staleness gate and the ambient HEAT-mode limit
 are **not removable** anywhere.

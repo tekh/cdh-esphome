@@ -104,6 +104,16 @@ class Thermostat {
     float os_mult_big = 3.0f;                // overshoot reduction multiplier, big
     float os_mult_mid = 2.0f;                // overshoot reduction multiplier, mid
     float pump_epsilon = 0.05f;              // Hz tolerance for at-min comparisons
+    // --- HEAT-mode self-resume (heater dropped out while mode is still ON) ---
+    // A faulted Vevor ECM parks in cooldown with `on` still true, and HEAT mode
+    // had no restart path at all: the heater stayed cold until a human re-selected
+    // the mode. Resume on its own, but slowly and a bounded number of times -
+    // every failed ignition shortens the ECM's own abort window (63->37->26 s)
+    // and past ~3 attempts it latches until the 12 V is cut. `ambient_limit_exceeded`
+    // is the HEAT-limit authority: no resume while the room is over it.
+    bool ambient_limit_exceeded = false;
+    uint32_t heat_restart_holdoff_ms = 60000;  // owner rule: 60 s hold-off
+    uint8_t heat_restart_max_attempts = 2;     // counted INCLUDING the operator's own start
   };
 
   // What the thermostat wants applied this tick. Multiple flags can be set;
@@ -162,10 +172,28 @@ class Thermostat {
   // stops answering polls once it is fully off, starving on_fresh_frame()).
   // Shares standby_threshold() with control() so the two cannot drift. Honours
   // the same stale-sensor no-blind-start gate. Only request_start can be set.
+  //
+  // Also owns the HEAT-mode self-resume (2026-11-20): a faulted ECM parks in
+  // cooldown with `on` still true and no restart path existed for mode ON, so
+  // the heater sat cold. Resume after `heat_restart_holdoff_ms`, at most
+  // `heat_restart_max_attempts` start requests per failed series, then park and
+  // require a human re-select (mode entry resets the series).
   Result recheck_off_state(const Telemetry &tlm, float room_temp, float target_temp,
                            HeaterMode mode, const Params &params, uint32_t now);
 
+  // True when the HEAT resume gave up: the ECM ignored every attempt and needs
+  // a 12 V power cycle (its own ignition latch), not another START frame.
+  bool heat_restart_parked() const { return heat_restart_parked_; }
+
  protected:
+  // Cooldown is NOT a burn. A faulted ECM reports raw state 4 (cooldown) with
+  // `on` still true, and a retry that only looks at `tlm.on` concludes the
+  // heater is running - which is exactly how a Heat-mode heater used to sit
+  // dead behind a "Cooldown" status.
+  static bool burning(const Telemetry &tlm) {
+    return tlm.on && tlm.run_state != RUN_STATE_COOLDOWN;
+  }
+
   // The single re-engage threshold (standby->start and auto-restart both
   // compare against it - v1 used the same formula in three places).
   static float standby_threshold(float target_temp, const Params &params) {
@@ -178,6 +206,10 @@ class Thermostat {
   bool in_standby_ = false;
   bool in_auto_shutdown_ = false;
   uint32_t last_pump_adjust_time_ = 0;
+  // HEAT self-resume bookkeeping (see Params::heat_restart_*).
+  uint32_t heat_restart_time_ = 0;     // millis() of the last HEAT start request
+  uint8_t heat_restart_attempts_ = 0;  // start requests since the heater last burned
+  bool heat_restart_parked_ = false;   // attempts exhausted: human re-select required
 };
 
 // === CombustionSafety (protection policy) ===================================
