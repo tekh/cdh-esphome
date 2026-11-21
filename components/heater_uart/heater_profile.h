@@ -191,7 +191,7 @@ inline HeaterProfile profile_vevor_2kw() {
   //     threshold (somewhere between levels 3 and 8) and low enough that the ramp
   //     stays small. Currently 1.5 Hz = level 6, one rung below the proven level 8.
   // Note: after repeated failed starts the ECM latches and refuses fuel at ANY
-  // level until power-cycled at 12 V (ISSUES #19) - do not read a no-dose abort as
+  // level until power-cycled at 12 V (ISSUES V-19) - do not read a no-dose abort as
   // a level problem until the unit has been power-cycled.
   p.pump_freq_pre_ignition = p.pump_freq_min;
   p.pump_freq_glow = 1.5f;

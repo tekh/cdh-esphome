@@ -36,9 +36,10 @@ ESPHome external component for UART communication with diesel heaters (BDAP 24-b
 │   ├── heater_select.cpp/h    # Mode select entity
 │   ├── fuel_prime_button.h    # Fuel prime button entity
 │   └── heater_uart.json       # ESPHome component manifest (must list every .cpp)
+├── docs/heater-notes/         # Per-model bench behaviour (one page per heater)
 ├── tests/                     # Host-side test harness (make -C tests, plain g++)
 ├── DESIGN.md                    # Why the architecture is this way (decisions, seams, phases)
-├── ISSUES.md                  # Open/parked/decided items with evidence
+├── ISSUES.md                  # Issue ledger; ids are scoped (CF-/V-/BD-) + index at top
 ├── @notes/bluetoothheater-master/  # Reference implementation (read-only)
 └── README.md                  # User docs incl. the "Adding a New Heater" checklist
 ```
@@ -59,7 +60,9 @@ ESPHome external component for UART communication with diesel heaters (BDAP 24-b
 | Fuel priming | `heater_uart.cpp:start_priming()/stop_priming()` | BDAP-only (Vevor refuses) |
 | State mappings | `bdap_driver.cpp` / `vevor_driver.cpp` | run-state names, error tables |
 | **Tune pump/fan/HX for a heater** | **`heater_profile.h` preset or per-key YAML overrides** | Overrides revert-to-preset when invariant-breaking |
+| **A heater's bench behaviour / quirks** | **`docs/heater-notes/<model>.md`** | Dose tables, timings, ECM latches - per model, not in the ledger |
 | Add a heater model | `heater_profile.h` + `__init__.py` + README table | Enum entry, preset factory, `cv.enum` mapping; new protocol = one driver |
+| Known issue / past decision | `ISSUES.md` | Read the index table first; cite as `ISSUES V-22`, `CF-12`, `BD-1` |
 
 ## CODE MAP
 
@@ -86,7 +89,14 @@ ESPHome external component for UART communication with diesel heaters (BDAP 24-b
 - `heater_model:` is REQUIRED in YAML — the profile is never implicit
 - `vevor_2kw_v2` is the in-production profile (lab device); `vevor_2kw` shares
   its tuning values and differs only in the HEAT-mode policy (kept as the
-  one-line revert target); open Vevor tuning items live in ISSUES.md #5-10
+  one-line revert target); open Vevor tuning items live in `ISSUES V-5...V-10`
+
+**Issue Ledger:**
+- One `ISSUES.md`, scoped ids (`CF-` common/facade, `V-` Vevor, `BD-` BDAP); the
+  number is the original ledger number and is never reused - cite as
+  `ISSUES V-22`, no `#`
+- Per-heater *behaviour* belongs in `docs/heater-notes/`, not in an issue: an
+  issue is something to fix or decide, a note is something to know
 
 **UART Protocol:**
 - Standalone-only since 2026-10-24 (LCD injection path removed; tag `lcd-injection-final`)
@@ -126,10 +136,18 @@ heater_uart:
 - **Never** change baud rate from what the selected profile requires (25000 BDAP / 4800 Vevor)
 - **Never** use separate TX/RX pins in standalone mode (half-duplex)
 - **Don't** suppress frame validation errors - indicates wiring/protocol issues
+- **Don't** send a protocol command once and assume it landed — Vevor START and
+  STOP are re-asserted at 1 Hz until the heater's state confirms (ISSUES V-22: a
+  one-shot START left a faulted heater un-restartable for 50 minutes)
+- **Don't** treat `run_state == COOLDOWN` as running — a faulted ECM parks there
+  with `on` true; test `Thermostat::burning()` (`on && state != COOLDOWN`) in
+  every off-state and restart decision
 - **Don't** run a brand-new heater profile for live control until its values are
   bench-validated (the current ones are: `vevor_2kw_v2` in production; `vevor_2kw`
   shares its tuning values, its unexercised part is the firmware-modulated HEAT
-  policy; `jeabong_8kw` parked per ISSUES.md #1)
+  policy; `jeabong_8kw` parked per `ISSUES BD-1`)
+- **Don't** record bench behaviour in an issue entry only — a fact that stays
+  true after the issue closes belongs in `docs/heater-notes/<model>.md`
 
 ## COMMON MODIFICATIONS
 
@@ -147,7 +165,8 @@ heater_uart:
 **Adding a New Heater (see README "Adding a New Heater"):**
 - Same protocol: one `HeaterModel` enum entry + preset factory + `profile_for()`
   case in `heater_profile.h`, one `cv.enum` line in `__init__.py`, one row in the
-  README table, the model added to `ALL_MODELS` in `tests/test_profiles.cpp`
+  README table, the model added to `ALL_MODELS` in `tests/test_profiles.cpp`,
+  plus one page in `docs/heater-notes/`
 - New protocol: additionally one `HeaterProtocolDriver` implementation (+
   `heater_uart.json` files entry + host framing/decode tests, same commit)
 

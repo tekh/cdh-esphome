@@ -76,7 +76,7 @@ TEST(profile_temp_range_is_sane) {
 }
 
 TEST(profile_one_fuel_dial_only) {
-  // ISSUES.md #3 (DECIDED): exactly one fuel dial per heater, enforced by the
+  // ISSUES.md CF-3 (DECIDED): exactly one fuel dial per heater, enforced by the
   // capability flags. Both true would allow two live controls to fight; both
   // false would leave the heater with no fuel control at all.
   for (const HeaterModel m : ALL_MODELS) {

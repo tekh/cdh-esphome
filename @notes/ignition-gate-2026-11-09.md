@@ -6,7 +6,7 @@ configuration, and what the 24 h soak still has to answer.
 
 Device: `lab-heater-butler` (Vevor 2 kW / XMZ-D2, `vevor_2kw_v2`) on hoas.
 Owner flashes; the agent commands and reads telemetry.
-Related: `ISSUES.md` #19, `@notes/vevor-protocol.md` (protocol facts).
+Related: `ISSUES.md` V-19, `@notes/vevor-protocol.md` (protocol facts).
 
 ---
 
